@@ -1,0 +1,25 @@
+#!/bin/sh
+# ADR-001 §8.3 rule 7 — provenance scan over the commits being pushed.
+# The pre-commit hook catches the ordinary case; this one catches commits made
+# before the hooks were enabled, and anything amended or rebased since.
+# Enable with:  git config core.hooksPath .githooks
+set -eu
+
+SCAN="$(git rev-parse --show-toplevel)/scripts/provenance-scan.sh"
+EMPTY=$(git hash-object -t tree /dev/null)
+
+# stdin: <local ref> <local sha> <remote ref> <remote sha>
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+    # Deletion of a remote ref: nothing is entering the history.
+    case "$local_sha" in *[!0]*) ;; *) continue ;; esac
+
+    # New branch on the remote: compare against the empty tree.
+    case "$remote_sha" in
+        *[!0]*) base="$remote_sha" ;;
+        *)      base="$EMPTY" ;;
+    esac
+
+    "$SCAN" range "$base" "$local_sha"
+done
+
+exit 0

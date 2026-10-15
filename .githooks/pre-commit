@@ -1,0 +1,5 @@
+#!/bin/sh
+# ADR-001 §8.3 rule 7 — provenance scan over what is about to enter the history.
+# Enable with:  git config core.hooksPath .githooks
+set -eu
+exec "$(git rev-parse --show-toplevel)/scripts/provenance-scan.sh" staged
