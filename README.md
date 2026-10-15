@@ -35,7 +35,16 @@ it.
 | Secret scanning | ✅ enabled |
 | Secret-scanning **push protection** | ✅ enabled — server-side, so `--no-verify` cannot pass it |
 | Protected `main`, no force-push, linear history | set the moment this first commit creates `main` |
-| **Provenance scan** | `scripts/provenance-scan.sh`, run by the hooks in `.githooks/` |
+| **Provenance scan** | ⚠ **present but NOT enabled** — `scripts/provenance-scan.sh` and the hooks in `.githooks/` are committed and tested, and deliberately left switched off. See below |
+
+### ⚠ Why the provenance scan is not enabled here
+
+**A recorded scope reading, not an oversight and not a deviation** *(2026-10-15)*:
+
+- **ADR-001 rule 7 binds component repositories**, and **rule 5** makes a disposable spike repository **not one**.
+- **Its premise does not hold either.** The scan guards the harvested estate's originating organisation and paths — and that estate is **the owner's own work, with no external organisation involved**. So a leak would be **brand hygiene, not a confidentiality breach**, and brand hygiene is **rule 6's** job, already discharged by naming the organisation `antarii`.
+
+✅ The mechanism stays committed and tested, so **enabling it is one command** if that ever changes. The instructions below remain valid for that case.
 
 ### The provenance list is deliberately NOT in this repository
 
