@@ -10,7 +10,7 @@
  * for show.
  */
 import React from 'react';
-import { ScrollView, Text, TextInput, Pressable, View, StyleSheet } from 'react-native';
+import { ScrollView, Text, Pressable, View, StyleSheet, useWindowDimensions } from 'react-native';
 
 import { Harness, type RunContext } from './src/harness/harness.ts';
 import { evaluate, plan } from './src/form/evaluate.ts';
@@ -19,6 +19,9 @@ import { SqlCipherStore } from './src/store/store.ts';
 import { Queue } from './src/queue/queue.ts';
 import { keystoreKeyProvider, openExpoDatabase } from './src/platform/expo-adapters.ts';
 import { spikeForm } from './src/form/spike-form.ts';
+import { ProfilePreference, type Profile } from './src/ui/profile.ts';
+import { repeatingPresentation, type RepeatingPresentation } from './src/ui/presentation.ts';
+import { FieldWidget, ProfileSwitch } from './src/ui/widgets.tsx';
 
 const RECORD = 'spike-record-1';
 
@@ -31,8 +34,14 @@ const context: RunContext = {
   offline: false,
 };
 
+/** The tenant default SwR-093 defaults to; the worker may switch from it. */
+const TENANT_DEFAULT_PROFILE: Profile = 'standard';
+
 export default function App(): React.JSX.Element {
   const form: FormDef = spikeForm;
+  // The real width, so SwR-084's fallback is decided by the device rather than
+  // by presentation.ts's ASSUMED_VIEWPORT_DP, which exists only for the tests.
+  const { width } = useWindowDimensions();
   const order = React.useMemo(() => plan(form), [form]);
   const harness = React.useMemo(() => new Harness(context, () => performance.now()), []);
   const store = React.useMemo(
@@ -43,6 +52,40 @@ export default function App(): React.JSX.Element {
   const [answers, setAnswers] = React.useState<Answers>({});
   const [ready, setReady] = React.useState(false);
   const [openSection, setOpenSection] = React.useState<string>(form.sections[0]!.id);
+
+  /**
+   * SwR-093's switch. The preference object holds the profile and nothing else
+   * — it has no reference to answers or to the instance, which is how "affects
+   * no captured data, and is not recorded on the instance" is true by
+   * construction rather than by care taken here. React needs its own copy to
+   * re-render on, so the profile is mirrored into state and the preference
+   * stays the thing that owns the rule.
+   */
+  const pref = React.useMemo(() => new ProfilePreference(TENANT_DEFAULT_PROFILE), []);
+  const [profile, setProfile] = React.useState<Profile>(pref.current());
+  const onSwitchProfile = React.useCallback(
+    (next: Profile) => {
+      pref.switchTo(next);
+      setProfile(pref.current());
+      // ✕ Nothing is written to the store here, deliberately. The switch is a
+      // device preference; writing it to the record would break SwR-093.
+    },
+    [pref],
+  );
+
+  /**
+   * SwR-084's presentation for the repeating section, at SwR-093's
+   * "correspondingly wider width". ⚠ The result genuinely differs between
+   * profiles on a phone-width screen, which is 1b's substantive finding: the
+   * same form shows a grid under Standard and stacked cards under Field.
+   */
+  const repeatColumns = form.fields.filter((f) => f.repeating).length;
+  const repeatPresentation: RepeatingPresentation = repeatingPresentation(
+    'grid',
+    repeatColumns,
+    profile,
+    width,
+  );
 
   // S1's stop is "the form is interactive", so the store must be open first.
   React.useEffect(() => {
@@ -91,6 +134,7 @@ export default function App(): React.JSX.Element {
   if (!ready) return <Text style={styles.status}>opening the encrypted store…</Text>;
 
   return (
+    <View style={styles.screen}>
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       {form.sections.map((section) => {
         const expanded = openSection === section.id;
@@ -106,25 +150,38 @@ export default function App(): React.JSX.Element {
               form.fields
                 .filter((f) => f.section === section.id && state.state[f.id]?.visible)
                 .map((f) => (
-                  <View key={f.id} style={styles.field}>
-                    <Text style={styles.label}>
-                      {f.label}
-                      {state.state[f.id]?.required ? ' *' : ''}
-                    </Text>
-                    <TextInput
-                      style={[styles.input, state.state[f.id]?.valid ? null : styles.invalid]}
-                      defaultValue={String(answers[f.id] ?? '')}
-                      onBlur={(e) => onCommit(f.id, e.nativeEvent.text)}
-                    />
-                    {state.state[f.id]?.message ? (
-                      <Text style={styles.message}>{state.state[f.id]!.message}</Text>
-                    ) : null}
-                  </View>
+                  <FieldWidget
+                    key={f.id}
+                    field={f}
+                    profile={profile}
+                    state={state.state[f.id]!}
+                    value={answers[f.id] ?? null}
+                    onCommit={onCommit}
+                  />
                 ))}
+            {expanded && section.repeating ? (
+              <Text style={styles.note}>
+                repeating presentation: {repeatPresentation} ({repeatColumns} columns, {width}dp
+                wide)
+              </Text>
+            ) : null}
           </View>
         );
       })}
     </ScrollView>
+    {/*
+      SyR-221: "On a phone, the actions used most often during capture shall be
+      reachable by the thumb of the hand holding it, in every profile." The
+      switch is one of `PRIMARY_CAPTURE_ACTIONS`, so it is pinned to the bottom
+      of the screen — inside the thumb zone — rather than put behind a settings
+      screen. ⚠ `presentation.ts` models the VERTICAL axis only, and the real
+      thumb arc is also horizontal; the far corner is what condition 3 has to
+      look at on a device.
+    */}
+    <View style={styles.thumbZone}>
+      <ProfileSwitch profile={profile} onSwitch={onSwitchProfile} />
+    </View>
+    </View>
   );
 }
 
@@ -134,9 +191,9 @@ const styles = StyleSheet.create({
   status: { padding: 24 },
   section: { marginBottom: 12 },
   sectionLabel: { fontWeight: '600', paddingVertical: 8 },
-  field: { marginBottom: 10 },
-  label: { marginBottom: 4 },
-  input: { borderWidth: 1, borderColor: '#999', borderRadius: 4, padding: 8 },
-  invalid: { borderColor: '#b00' },
-  message: { color: '#b00', marginTop: 2 },
+  note: { paddingVertical: 4, fontStyle: 'italic' },
+  // ✕ No field, label, input, invalid or message styles any more: every
+  // dimension and colour a widget uses now comes from `profile.ts`'s tokens,
+  // which is what makes `presentation.test.ts` evidence about what renders.
+  thumbZone: { padding: 12 },
 });
