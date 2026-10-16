@@ -41,7 +41,10 @@ import {
   type Fs,
   type PlatformUpload,
   type Grants,
+  type PartReceipt,
 } from './media.ts';
+import { SqliteSessionStore, type MediaSession } from './session.ts';
+import type { SqliteLike } from '../store/store.ts';
 
 const ENDPOINT = process.env.S3_ENDPOINT ?? 'http://localhost:9090';
 const BUCKET = process.env.S3_BUCKET ?? 'antarii-spike-media';
@@ -164,15 +167,25 @@ class S3MultipartPlatform implements PlatformUpload {
   private readonly key: string;
   private readonly stagingDir: string;
   private uploadId: string | null = null;
-  private next = 1;
-  readonly etags: string[] = [];
   readonly grantsSeen: string[] = [];
   /** staging files present at each hand-off — the "one at a time" witness */
   readonly stagedAtSend: number[] = [];
 
-  constructor(key: string, stagingDir: string) {
+  /**
+   * ⚠ `adoptUploadId` is leg (iii)'s requirement, not a convenience. After an
+   * update the application is new and the multipart upload is not; a platform
+   * that could only ever `initiate()` a fresh one would make the persisted
+   * upload id useless and leg (iii) unmeasurable.
+   */
+  constructor(key: string, stagingDir: string, adoptUploadId: string | null = null) {
     this.key = key;
     this.stagingDir = stagingDir;
+    this.uploadId = adoptUploadId;
+  }
+
+  currentUploadId(): string {
+    assert.ok(this.uploadId, 'no upload id');
+    return this.uploadId;
   }
 
   private url(q: string): string {
@@ -185,7 +198,7 @@ class S3MultipartPlatform implements PlatformUpload {
     this.uploadId = tagOf(await r.text(), 'UploadId');
   }
 
-  async send(file: StagingFile, grant: string): Promise<void> {
+  async send(file: StagingFile, grant: string): Promise<PartReceipt> {
     assert.ok(this.uploadId, 'send before initiate');
     // Observed INSIDE the hand-off, which is the only moment at which two
     // plaintext copies could coexist.
@@ -200,7 +213,14 @@ class S3MultipartPlatform implements PlatformUpload {
 
     const body = await readFile(file.path);
     assert.equal(body.length, file.bytes, 'staged size disagrees with the hand-off');
-    const n = this.next++;
+    // ⚠ The part number is DERIVED from the part, not from a counter. A
+    // counter is wrong the moment an upload resumes: after an update the
+    // second run's first part is not part 1, and a counter would overwrite
+    // part 1 with part 3's bytes and complete an upload that reassembles to
+    // the wrong object.
+    const idx = Number(file.path.split('.part')[1]);
+    assert.ok(Number.isInteger(idx), 'cannot derive a part index from ' + file.path);
+    const n = idx + 1; // S3 part numbers are 1-based
     const r = await fetch(this.url('?partNumber=' + n + '&uploadId=' + this.uploadId), {
       method: 'PUT',
       body,
@@ -211,12 +231,21 @@ class S3MultipartPlatform implements PlatformUpload {
     assert.equal(r.status, 200, 'PUT part ' + n);
     const etag = r.headers.get('etag');
     assert.ok(etag, 'no ETag on part ' + n);
-    this.etags.push(etag);
+    return { etag };
   }
 
-  async complete(): Promise<void> {
-    const parts = this.etags
-      .map((e, i) => '<Part><PartNumber>' + (i + 1) + '</PartNumber><ETag>' + e + '</ETag></Part>')
+  /**
+   * ⚠ The manifest comes from the PERSISTED SESSION, not from anything this
+   * object collected. After an update this platform instance has only sent
+   * the remaining parts; the parts sent by the previous build exist solely in
+   * the part list that crossed the update. That is precisely what leg (iii)
+   * means by "the persisted multipart part list intact" — if it is not
+   * intact, the complete below fails.
+   */
+  async complete(manifest: readonly { index: number; etag: string }[]): Promise<void> {
+    const parts = [...manifest]
+      .sort((a, b) => a.index - b.index)
+      .map((p) => '<Part><PartNumber>' + (p.index + 1) + '</PartNumber><ETag>' + p.etag + '</ETag></Part>')
       .join('');
     const r = await fetch(this.url('?uploadId=' + this.uploadId), {
       method: 'POST',
@@ -233,6 +262,37 @@ class S3MultipartPlatform implements PlatformUpload {
     assert.equal(r.status, 200, 'GET the completed object');
     return Buffer.from(await r.arrayBuffer());
   }
+}
+
+/**
+ * A database that OUTLIVES the application objects using it, which is what an
+ * install-over leaves behind on a device: the code is replaced, the encrypted
+ * store is not.
+ */
+function persistentDb(): SqliteLike {
+  const rows = new Map<string, Record<string, unknown>>();
+  return {
+    async execAsync() {},
+    async runAsync(sql, params) {
+      if (sql.startsWith('DELETE')) {
+        rows.delete(String(params[0]));
+        return;
+      }
+      rows.set(String(params[0]), {
+        mediaId: params[0],
+        transferSessionId: params[1],
+        uploadId: params[2],
+        parts: params[3],
+        createdByBuild: params[4],
+        lastTouchedByBuild: params[5],
+      });
+    },
+    async getAllAsync(_sql, params) {
+      const r = rows.get(String(params[0]));
+      return r ? [r] : [];
+    },
+    async closeAsync() {},
+  };
 }
 
 async function up(url: string, method: string): Promise<boolean> {
@@ -279,13 +339,28 @@ test(
       const platform = new S3MultipartPlatform('leg2/media-1.bin', stagingDir);
       await platform.initiate();
 
-      const uploader = new MediaUploader(crypto, fs, platform, grants);
-      const outcome = await uploader.upload('media-1', parts);
+      // The session is driven even here, where nothing resumes, so the
+      // manifest has ONE source in both tests rather than two code paths.
+      const sessions = new SqliteSessionStore(persistentDb(), 'N');
+      await sessions.init();
+      const session: MediaSession = {
+        mediaId: 'media-1',
+        transferSessionId: 'dev-machine-no-platform-session',
+        uploadId: platform.currentUploadId(),
+        parts: [],
+        createdByBuild: 'N',
+        lastTouchedByBuild: 'N',
+      };
+
+      const uploader = new MediaUploader(crypto, fs, platform, grants, sessions);
+      const outcome = await uploader.upload('media-1', parts, session);
 
       assert.equal(outcome.failedAtPart, null, 'no part should have failed');
       assert.equal(outcome.partsSent, 3);
 
-      await platform.complete();
+      const persisted = await sessions.load('media-1');
+      assert.equal(persisted!.parts.length, 3, 'every part should be in the persisted list');
+      await platform.complete(persisted!.parts);
 
       // ---- THE decisive assertion: S3's reassembly equals the plaintext ----
       const got = await platform.fetchObject();
@@ -366,6 +441,148 @@ test(
         [],
         'the staging directory is not empty after a failure',
       );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+      await rm(stagingDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'LEG (iii): an update lands mid-upload, and the object still reassembles byte-identically',
+  { skip: live ? false : whyNot },
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'antarii-leg3-'));
+    const stagingDir = await mkdtemp(join(tmpdir(), 'antarii-staging3-'));
+    try {
+      const plain = randomBytes(2 * PART + 4096);
+      const key = randomBytes(32);
+      const iv = randomBytes(16);
+      const c = createCipheriv('aes-256-ctr', key, iv);
+      const cipherPath = join(dir, 'media.enc');
+      await writeFile(cipherPath, Buffer.concat([c.update(plain), c.final()]));
+
+      const parts: PartRef[] = [
+        { index: 0, offset: 0, length: PART },
+        { index: 1, offset: PART, length: PART },
+        { index: 2, offset: 2 * PART, length: 4096 },
+      ];
+
+      const crypto = new RangeCrypto(cipherPath, key, iv, stagingDir);
+      const fs = new NodeFs();
+      const db = persistentDb();
+      const KEY = 'leg3/media-1.bin';
+
+      // ================= build N: get one part away, then be interrupted ======
+      const sessionsN = new SqliteSessionStore(db, 'N');
+      await sessionsN.init();
+      const platformN = new S3MultipartPlatform(KEY, stagingDir);
+      await platformN.initiate();
+
+      const sessionN: MediaSession = {
+        mediaId: 'media-1',
+        transferSessionId: 'platform-session-under-N',
+        uploadId: platformN.currentUploadId(),
+        parts: [],
+        createdByBuild: 'N',
+        lastTouchedByBuild: 'N',
+      };
+      await sessionsN.save(sessionN);
+
+      /**
+       * ⚠ THE INTERRUPTION IS REAL, NOT A FLAG. Part 0 is genuinely PUT to
+       * s3mock and its ETag persisted; part 1 then fails. So at the moment of
+       * the "update" the upload is actually in flight: the server holds a
+       * live multipart upload with one part in it. That is what the run plan
+       * means by "installed over one another WITH TRANSFERS IN FLIGHT", and
+       * it is why the slow link matters at the bench.
+       */
+      const interrupted: PlatformUpload = {
+        async send(file: StagingFile, grant: string) {
+          const idx = Number(file.path.split('.part')[1]);
+          if (idx >= 1) throw new Error('the application was replaced mid-transfer');
+          return platformN.send(file, grant);
+        },
+      };
+
+      const outcomeN = await new MediaUploader(
+        crypto,
+        fs,
+        interrupted,
+        new StubGrants(),
+        sessionsN,
+      ).upload('media-1', parts, sessionN);
+
+      assert.equal(outcomeN.partsSent, 1, 'build N should have got exactly one part away');
+      assert.equal(outcomeN.failedAtPart, 1, 'and should have failed on the second');
+      const midFlight = await sessionsN.load('media-1');
+      assert.equal(midFlight!.parts.length, 1, 'one part should be persisted, not none and not three');
+
+      // ================= the update: new code, same database ==================
+      // Every object from here is new. The ONLY thing crossing is the row.
+      const sessionsNext = new SqliteSessionStore(db, 'N+1');
+      const carried = await sessionsNext.load('media-1');
+      assert.ok(carried, 'the session did not survive the update');
+
+      // leg (iii)'s first subject
+      assert.equal(
+        carried.transferSessionId,
+        'platform-session-under-N',
+        'the transfer session identifier did not survive the update',
+      );
+      // leg (iii)'s second subject
+      assert.deepEqual(
+        carried.parts,
+        midFlight!.parts,
+        'the persisted multipart part list is not intact across the update',
+      );
+
+      // ⚠ Adopting the upload id is the whole test. A fresh initiate() here
+      // would pass every assertion below and prove nothing: the point is that
+      // the upload the PREVIOUS build opened is the one that finishes.
+      const platformNext = new S3MultipartPlatform(KEY, stagingDir, carried.uploadId);
+      assert.equal(platformNext.currentUploadId(), midFlight!.uploadId);
+
+      const outcomeNext = await new MediaUploader(
+        crypto,
+        fs,
+        platformNext,
+        new StubGrants(),
+        sessionsNext,
+      ).upload('media-1', parts, carried);
+
+      assert.equal(outcomeNext.failedAtPart, null, 'the resumed run should not fail');
+      assert.equal(outcomeNext.partsSent, 2, 'N+1 should send the two remaining parts, not three');
+      assert.deepEqual(
+        platformNext.stagedAtSend,
+        [1, 1],
+        'the resumed run staged more than one part at a time',
+      );
+
+      const finalSession = await sessionsNext.load('media-1');
+      assert.deepEqual(
+        finalSession!.parts.map((p) => p.index).sort(),
+        [0, 1, 2],
+        'the completed list must hold every part, including the one build N sent',
+      );
+      // The record SHOWS the update: opened by N, last written by N+1.
+      assert.equal(finalSession!.createdByBuild, 'N');
+      assert.equal(finalSession!.lastTouchedByBuild, 'N+1');
+
+      // ---- THE decisive assertion, and it depends on the part list ----
+      // The manifest is built from the persisted list, which contains part 0's
+      // ETag from build N. If that had not survived, this complete fails.
+      await platformNext.complete(finalSession!.parts);
+      const got = await platformNext.fetchObject();
+      assert.equal(
+        createHash('sha256').update(got).digest('hex'),
+        createHash('sha256').update(plain).digest('hex'),
+        'the object does not reassemble after the update — the part list did not carry',
+      );
+
+      assert.deepEqual(await readdir(stagingDir), [], 'staging survived the resumed upload');
+      await sessionsNext.clear('media-1');
+      assert.equal(await sessionsNext.load('media-1'), null, 'a finished upload left a resumable handle');
     } finally {
       await rm(dir, { recursive: true, force: true });
       await rm(stagingDir, { recursive: true, force: true });

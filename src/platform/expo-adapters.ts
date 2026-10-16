@@ -1,6 +1,17 @@
 /**
- * The ONLY module that imports Expo. Everything else in src/ is plain
- * TypeScript and tested with `node --test` on a development machine.
+ * The store's Expo adapters.
+ *
+ * ⚠ THE BOUNDARY IS THE DIRECTORY, NOT THIS FILE. This header used to read
+ * "the ONLY module that imports Expo"; `#24` added `expo-media.ts` beside it
+ * for the capture path and the part uploader, so the rule is now that
+ * **`src/platform/` is the only place in `src/` that imports Expo**. The
+ * change is recorded rather than made quietly, because the rule is what keeps
+ * axis 5 leg (iv) attributable and a reader is entitled to know it moved.
+ * A directory serves that purpose as well as a file did, and keeps the store
+ * adapters and the media adapters separately readable.
+ *
+ * Everything else in src/ is plain TypeScript and tested with `node --test` on
+ * a development machine.
  *
  * Keeping the boundary here is what let build 1's logic — re-evaluation, the
  * queue, the media path, the store's driving order — be written and tested
@@ -10,6 +21,7 @@
  */
 import * as SQLite from 'expo-sqlite';
 import * as SecureStore from 'expo-secure-store';
+import * as Crypto from 'expo-crypto';
 
 import type { KeyProvider, OpenDatabase, SqliteLike } from '../store/store.ts';
 
@@ -35,7 +47,12 @@ export const keystoreKeyProvider: KeyProvider = {
     // 32 bytes, hex — SQLCipher accepts a passphrase or a raw key; a
     // passphrase is used here so the spike measures SQLCipher's own KDF,
     // which is part of what the 300 ms budget has to absorb.
-    const bytes = globalThis.crypto.getRandomValues(new Uint8Array(32));
+    // ⚠ `expo-crypto` rather than `globalThis.crypto`. React Native's global
+    // crypto is not guaranteed across both platforms and engines, and a
+    // SILENT absence here would be the worst possible failure: the key is what
+    // the whole encrypted store rests on. expo-crypto is a declared, pinned
+    // dependency, so its presence is a fact rather than a hope.
+    const bytes = Crypto.getRandomValues(new Uint8Array(32));
     const hex = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
     await SecureStore.setItemAsync(KEY_ITEM, hex, KEY_OPTIONS);
     return hex;

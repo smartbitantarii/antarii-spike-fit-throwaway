@@ -10,7 +10,15 @@
  * for show.
  */
 import React from 'react';
-import { ScrollView, Text, Pressable, View, StyleSheet, useWindowDimensions } from 'react-native';
+import {
+  ScrollView,
+  Text,
+  Pressable,
+  View,
+  Image,
+  StyleSheet,
+  useWindowDimensions,
+} from 'react-native';
 
 import { Harness, type RunContext } from './src/harness/harness.ts';
 import { evaluate, plan } from './src/form/evaluate.ts';
@@ -19,6 +27,9 @@ import { SqlCipherStore } from './src/store/store.ts';
 import { Queue } from './src/queue/queue.ts';
 import { keystoreKeyProvider, openExpoDatabase } from './src/platform/expo-adapters.ts';
 import { spikeForm } from './src/form/spike-form.ts';
+import { BUILD_ID } from './src/build.ts';
+import { planCapture, SHIPPED_LAYERS, LOCATION_UNAVAILABLE } from './src/media/prepare.ts';
+import { captureAndPrepare, type CaptureResult } from './src/platform/expo-media.ts';
 import { ProfilePreference, type Profile } from './src/ui/profile.ts';
 import { repeatingPresentation, type RepeatingPresentation } from './src/ui/presentation.ts';
 import { FieldWidget, ProfileSwitch } from './src/ui/widgets.tsx';
@@ -27,8 +38,11 @@ const RECORD = 'spike-record-1';
 
 const context: RunContext = {
   // leg (iii) tests an application UPDATE, so the build identity must be
-  // visible in the record: N and N+1 differ here and in app.json's version.
-  buildId: 'N',
+  // visible in the record. ⚠ READ from src/build.ts rather than written here:
+  // a hardcoded 'N' would survive `npm run bump-to-n-plus-1` and the record
+  // would name the wrong build, which is a false pass on the leg that tests
+  // the update. build.test.ts holds build.ts and app.json to each other.
+  buildId: BUILD_ID,
   device: 'set at run time by the operator',
   fill: 'set at run time by the operator',
   offline: false,
@@ -63,6 +77,28 @@ export default function App(): React.JSX.Element {
    */
   const pref = React.useMemo(() => new ProfilePreference(TENANT_DEFAULT_PROFILE), []);
   const [profile, setProfile] = React.useState<Profile>(pref.current());
+
+  /**
+   * S5 — "photograph attached and visible, including compression (SwR-086) and
+   * stamping (SwR-102)", under 2 s.
+   *
+   * ⚠ THE TWO CLOCK POINTS ARE M7 §2's, NOT CONVENIENT ONES.
+   * START is "the shutter returns an image to the application" — so it is the
+   * `onShutter` callback inside `captureAndPrepare`, NOT the button tap, which
+   * would wrongly include the worker framing the shot and the camera opening.
+   * STOP is "the thumbnail is VISIBLE in the form, after compression and
+   * stamping" — so it is the thumbnail Image's own `onLoad`, not the moment
+   * state is set, which is merely when React was told.
+   */
+  const [capture, setCapture] = React.useState<CaptureResult | null>(null);
+  const onCapture = React.useCallback(async () => {
+    // The level in force comes from SwR-086's layers, resolved in prepare.ts.
+    const plan = planCapture(SHIPPED_LAYERS);
+    const result = await captureAndPrepare(plan, () => harness.start('S5'));
+    // ✕ A cancel is not a failure and must not be timed as one: with no
+    // result there is no stop, so no sample is recorded.
+    if (result) setCapture(result);
+  }, [harness]);
   const onSwitchProfile = React.useCallback(
     (next: Profile) => {
       pref.switchTo(next);
@@ -179,6 +215,45 @@ export default function App(): React.JSX.Element {
       look at on a device.
     */}
     <View style={styles.thumbZone}>
+      {/*
+        Both of these are in `PRIMARY_CAPTURE_ACTIONS`, which is why they are
+        here and not in a menu: SyR-221 requires the actions used most often
+        during capture to be thumb-reachable IN EVERY PROFILE.
+      */}
+      <Pressable onPress={onCapture} style={styles.capture} accessibilityRole="button">
+        <Text>Capture a photograph</Text>
+      </Pressable>
+      {capture ? (
+        <View style={styles.thumbRow}>
+          <Image
+            source={{ uri: capture.uri }}
+            style={styles.thumb}
+            // S5's STOP: the thumbnail is visible, after compression and stamping.
+            onLoad={() => harness.stop('S5')}
+          />
+          {/* The stamp is shown because SwR-102 makes it part of the response,
+              and because a figure for "attached and visible" is only honest if
+              what became visible included the stamp. */}
+          <View style={styles.stamp}>
+            <Text style={styles.note}>level used: {capture.stamp.levelUsed}</Text>
+            <Text style={styles.note}>
+              {capture.nativeWidth}×{capture.nativeHeight} → long edge{' '}
+              {capture.stamp.longEdgePx ?? 'native'}
+            </Text>
+            <Text style={styles.note}>
+              {capture.stamp.location
+                ? 'at ' +
+                  capture.stamp.location.latitude.toFixed(4) +
+                  ', ' +
+                  capture.stamp.location.longitude.toFixed(4) +
+                  ' ±' +
+                  (capture.stamp.location.accuracyMetres ?? '?') +
+                  'm'
+                : LOCATION_UNAVAILABLE}
+            </Text>
+          </View>
+        </View>
+      ) : null}
       <ProfileSwitch profile={profile} onSwitch={onSwitchProfile} />
     </View>
     </View>
@@ -196,4 +271,8 @@ const styles = StyleSheet.create({
   // dimension and colour a widget uses now comes from `profile.ts`'s tokens,
   // which is what makes `presentation.test.ts` evidence about what renders.
   thumbZone: { padding: 12 },
+  capture: { paddingVertical: 12, alignItems: 'center' },
+  thumbRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  thumb: { width: 64, height: 64, borderRadius: 4 },
+  stamp: { marginLeft: 8, flex: 1 },
 });
