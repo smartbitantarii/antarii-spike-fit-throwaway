@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "Antarii Spike",
+    "slug": "antarii-spike-fit-throwaway",
+    "version": "1.0.0",
+    "runtimeVersion": "1",
+    "orientation": "default",
+    "newArchEnabled": true,
+    "android": {
+      "package": "com.antarii.spike"
+    },
+    "ios": {
+      "bundleIdentifier": "com.antarii.spike",
+      "infoPlist": {
+        "NSCameraUsageDescription": "The spike captures a photograph to measure condition 1's attach-and-display figure."
+      }
+    },
+    "plugins": [
+      [
+        "expo-sqlite",
+        {
+          "useSQLCipher": true
+        }
+      ]
+    ]
+  }
+}
