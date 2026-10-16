@@ -1,0 +1,65 @@
+# Ignore rules for the disposable spike repository.
+#
+# ⚠ This file matters more here than it looks. ADR-001 §8.3 rule 7's
+# protections are ON for this repository — protected `main`, no force-push,
+# linear history — so anything that reaches this history CANNOT be removed
+# from it. Rule 7 says so in its own words: "a history that cannot be
+# rewritten cuts both ways: nothing can be removed from it either."
+#
+# The repository is also PUBLIC. Both facts together mean a careless commit
+# is not a tidying problem, it is a delete-and-recreate problem.
+
+# --- dependencies: the one that would be unfixable ---
+node_modules/
+.pnpm-store/
+
+# --- Expo / React Native generated output ---
+# android/ and ios/ are produced by `expo prebuild` (continuous native
+# generation), so they are build output rather than source for this spike.
+.expo/
+android/
+ios/
+dist/
+web-build/
+*.tsbuildinfo
+
+# --- built application packages ---
+# 🔴 These can embed signing material, and this repository is public.
+# D5's discipline is a development identity that is separately revocable and
+# a distribution certificate that never leaves the owner's keychain — an
+# .apk/.ipa committed here would defeat both.
+*.apk
+*.aab
+*.ipa
+*.app
+*.dSYM.zip
+
+# --- credentials and secrets ---
+# Signing material is received as an injected secret and nothing is retained
+# after the build (ADR-012 §3a rule 1). Nothing of the sort belongs in-tree.
+.env
+.env.*
+*.keystore
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+google-services.json
+GoogleService-Info.plist
+
+# --- the provenance list, belt and braces ---
+# It lives at .git/provenance-forbidden.txt, which git never commits, so this
+# is redundant by design. Kept because rule 7's whole point is that the list
+# must not reach the repository, and a redundant guard costs nothing.
+provenance-forbidden.txt
+
+# --- measurement output ---
+# Figures belong in the record (§8), not in the history as raw dumps.
+/measurements/
+*.measurements.json
+
+# --- noise ---
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db

@@ -5,6 +5,6 @@
   "type": "module",
   "description": "Disposable spike: the ADR-003 fit spike and the ADR-005 evaluator-hosting spike. Not a component repository.",
   "scripts": {
-    "test:harness": "node --test src/harness/"
+    "test": "node --test"
   }
 }
