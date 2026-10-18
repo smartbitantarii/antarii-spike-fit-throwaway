@@ -86,7 +86,9 @@ a number no user would ever see.**
 |---|---|---|
 | **`test`** | every push and PR | **no** — and it runs **leg (ii) against a real s3mock and the real grant issuer**, refusing a silent skip |
 | **`android`** | manual only | **no** — `assembleRelease` is signed with the keystore `prebuild` generates, which is enough to sideload |
-| **`ios`** | manual only | ✕ **yes — four, and they are the owner's** |
+| **`ios`** | manual only | ✕ **yes — four, in the `ios-signing` environment, released by your approval** |
+| **`publish-ota`** | after `ios` | **no** — publishes the build to GitHub Pages and prints the install link |
+| **`OTA teardown`** | manual only | **no** — replaces the published build with an empty page |
 
 ➕ *The builds are manual deliberately: a device build is taken when someone is about to install
 it, and §7 rule 2 makes a changed store invalidate every figure taken on the old one, so a build
@@ -94,11 +96,15 @@ should be a deliberate act against a known commit.*
 
 ### The four iOS secrets — the owner's, and nobody else can supply them
 
+🔴 **Put them in the `ios-signing` ENVIRONMENT, not in the repository's secrets**, and give
+that environment **required reviewers**. The repository is public — which is what keeps the macOS
+runner and push protection free — so **visibility is not the control; the approval gate is.**
+
 | Secret | What it is |
 |---|---|
-| `IOS_CERTIFICATE_P12_BASE64` | the **development** certificate + private key, as a base64 `.p12` |
+| `IOS_CERTIFICATE_P12_BASE64` | the **Apple Distribution** certificate + private key, as a base64 `.p12` |
 | `IOS_CERTIFICATE_PASSWORD` | the password set when exporting that `.p12` |
-| `IOS_PROVISIONING_PROFILE_BASE64` | a **development** provisioning profile for `com.antarii.spike`, base64, **including both device UDIDs** |
+| `IOS_PROVISIONING_PROFILE_BASE64` | an **Ad Hoc** provisioning profile for `com.antarii.spike`, base64, **including both device UDIDs** |
 | `APPLE_TEAM_ID` | the ten-character Team ID from the membership |
 
 🔴 **Add these in GitHub directly** — *Settings → Secrets and variables → Actions*. They must not
@@ -125,20 +131,26 @@ openssl genrsa -out spike.key 2048
 openssl req -new -key spike.key -out spike.csr -subj "/emailAddress=YOU/CN=Antarii Spike/C=GB"
 ```
 
-2. **developer.apple.com → Certificates** → new **Apple Development** certificate → upload
-   `spike.csr` → download `development.cer`.
-3. **Devices** → register **both** phones by UDID.
-4. **Profiles** → new **iOS App Development** profile → App ID `com.antarii.spike` → select that
-   certificate and **both** devices → download `spike.mobileprovision`.
+2. **developer.apple.com → Certificates** → new **Apple Distribution** certificate → upload
+   `spike.csr` → download `distribution.cer`.
+   ⚠ **Distribution, not Development** — an **Ad Hoc** profile requires it, and an Ad Hoc profile
+   is what an over-the-air install needs. A Development certificate fails at the export step.
+3. **Identifiers** → App ID `com.antarii.spike` → enable **NFC Tag Reading**.
+   ⚠ Condition 4's NFC leg needs this, and NFC does **not** work with a wildcard App ID — it needs
+   the explicit one, which we have. Enable it *before* creating the profile or the profile will not
+   carry it.
+4. **Devices** → register **both** phones by UDID.
+5. **Profiles** → new **Ad Hoc** profile → App ID `com.antarii.spike` → select that certificate and
+   **both** devices → download `spike.mobileprovision`.
 
 ```bash
-# 5. combine the downloaded certificate with the key into a .p12
-openssl x509 -in development.cer -inform DER -out development.pem -outform PEM
-openssl pkcs12 -export -inkey spike.key -in development.pem -out spike.p12
+# 6. combine the downloaded certificate with the key into a .p12
+openssl x509 -in distribution.cer -inform DER -out distribution.pem -outform PEM
+openssl pkcs12 -export -inkey spike.key -in distribution.pem -out spike.p12
 ```
 
 ```powershell
-# 6. base64 both, on Windows, into files you then paste from and delete
+# 7. base64 both, on Windows, into files you then paste from and delete
 [Convert]::ToBase64String([IO.File]::ReadAllBytes("spike.p12"))          > p12.b64.txt
 [Convert]::ToBase64String([IO.File]::ReadAllBytes("spike.mobileprovision")) > profile.b64.txt
 ```
@@ -149,18 +161,25 @@ apart from the first"*.
 
 ### ⚠ Two things this does not solve
 
-- **The iOS install route is still open, and the run plan already flagged it**: *"the signed build
-  has to be fetched from CI and installed on the device, so the install route is now part of the
-  setup"*. **Fetching the `.ipa` is easy; installing it on an iPhone from Windows has no
-  first-party route** — Apple Configurator and Xcode's device window are both macOS-only. The
-  realistic options are **(a) an over-the-air install** from an `itms-services://` link, **(b)
-  TestFlight internal testing**, or **(c) a Mac for the install step only** (which `O2` said was not
-  needed *for **building***, and installing is not building).
-  ⚠ **(a) and (b) both need an Apple DISTRIBUTION certificate** — an Ad Hoc profile requires one,
-  and so does App Store Connect — **so only (c) keeps a distribution certificate out of CI**.
-  ✕ *Third-party Windows sideloaders are rejected: they **re-sign** the app, changing the artefact
-  being measured, and free-account signing expires in about a week.*
-  **An owner decision, not an assumption to make here.**
+- ✅ **The iOS install route is SOLVED — over the air, decided by the owner 2026-10-18.** The run
+  plan flagged it as owed: *"the signed build has to be fetched from CI and installed on the
+  device, so the install route is now part of the setup"*. `publish-ota` publishes the build to
+  GitHub Pages and prints an `itms-services://` link to open on the phone.
+  ✅ **Probed before anything was committed to it**: iOS accepted the manifest served as
+  `application/octet-stream`, which vendor sources had said would be **refused silently**. They
+  were wrong, and the probe is why that is known rather than assumed.
+  ➕ **Why the other routes lost.** **A Mac** — Apple Configurator needs no Xcode, but the owner's
+  2019 Intel Mac does not boot, and a cloud Mac cannot help because installing needs a physical USB
+  connection. **TestFlight** — needs the same distribution certificate *and* puts the build through
+  Apple's pipeline, so what installs is not CI's artefact. ✕ **Third-party Windows sideloaders** —
+  they **re-sign** the app, changing the artefact being measured; their entitlements feature is a
+  **paid extra**, without which condition 4's NFC leg cannot run; and they want the **Apple ID
+  password**, which on the account the owner's iPhone uses is a *wider* exposure than a scoped
+  certificate, not a narrower one.
+  ➕ **And the distribution certificate is accepted on the requirement's own reasoning**: ADR-012
+  §6.6 rule 5's harm is *"a new application identity in the store"*, and **nothing is published** —
+  so a compromise is revoke-and-reissue. The gate is the `ios-signing` environment's required
+  reviewers, not the repository's visibility.
 - **Both devices need a device lock set**, because ADR-003 §5.3.4 decided the application *"refuses
   to hold tenant data without one"* — **a phone with no passcode cannot run the spike at all.**
 

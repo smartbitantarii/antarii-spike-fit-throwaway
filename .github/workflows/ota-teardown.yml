@@ -1,0 +1,82 @@
+# Take the published build down.
+#
+# ⚠ WHY THIS IS A BUTTON AND NOT A NOTE. `publish-ota` leaves a signed `.ipa`
+# publicly downloadable for as long as Pages serves it. That is a small
+# exposure — the package holds **no private key**, it reveals the team id and
+# the registered device UDIDs, and it installs on nothing but those phones —
+# but it is an exposure with no reason to persist once the build is on the
+# devices. Leaving it up until someone remembers is how it persists.
+#
+# ➕ It replaces the site rather than disabling Pages, so the next
+# `publish-ota` still works with no setup. Visiting the URL afterwards gets a
+# page saying nothing is published, which is a clearer answer than a 404.
+#
+# 🔴 It does NOT revoke anything. If the certificate itself ever needs
+# withdrawing, that is done in the Apple Developer portal, not here.
+
+name: OTA teardown
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Shares the group with the publish job so a teardown cannot race a deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  teardown:
+    name: replace the published build with an empty page
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
+
+      - name: build the empty site
+        run: |
+          set -eu
+          mkdir -p site
+          cat > site/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Nothing published</title>
+            <style>
+              :root { color-scheme: light dark; }
+              body { font: 17px/1.5 -apple-system, system-ui, sans-serif; margin: 0; padding: 24px; }
+            </style>
+          </head>
+          <body>
+            <h1>Nothing published</h1>
+            <p>No build is currently available here. Run the <strong>spike build</strong>
+            workflow to publish one.</p>
+          </body>
+          </html>
+          HTML
+          ls -la site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: confirm
+        run: |
+          {
+            echo "## Taken down"
+            echo ""
+            echo "The published build has been replaced with an empty page."
+            echo "Nothing was revoked — the certificate and profile are untouched."
+          } >> "$GITHUB_STEP_SUMMARY"
