@@ -72,7 +72,15 @@ jobs:
         run: |
           set -eu
           mkdir -p site
-          echo "base url: $BASE"
+
+          # 🔴 `base_url` HAS NO TRAILING SLASH, and assuming it did
+          # cost a whole test round: every URL came out as
+          # ".../antarii-spike-fit-throwawaymanifest.plist", so iOS had nothing
+          # to fetch and the probe looked like a REFUSAL when it was a 404.
+          # Normalised both ways so it is right whichever form the action
+          # returns.
+          BASE="${BASE%/}"
+          echo "base url (normalised): $BASE"
 
           # --- a dummy payload. Deliberately not a real app: the install must
           # --- fail, and the PROMPT is what we are testing for.
@@ -98,15 +106,15 @@ jobs:
                 <array>
                   <dict>
                     <key>kind</key><string>software-package</string>
-                    <key>url</key><string>${BASE}app.ipa</string>
+                    <key>url</key><string>${BASE}/app.ipa</string>
                   </dict>
                   <dict>
                     <key>kind</key><string>display-image</string>
-                    <key>url</key><string>${BASE}icon57.png</string>
+                    <key>url</key><string>${BASE}/icon57.png</string>
                   </dict>
                   <dict>
                     <key>kind</key><string>full-size-image</string>
-                    <key>url</key><string>${BASE}icon512.png</string>
+                    <key>url</key><string>${BASE}/icon512.png</string>
                   </dict>
                 </array>
                 <key>metadata</key>
@@ -146,16 +154,20 @@ jobs:
             <h1>OTA probe</h1>
             <p><strong>Open this page on the iPhone.</strong> Tap each button in turn and note
             whether an install prompt appears naming <em>Antarii OTA MIME CHECK</em>.</p>
-            <a class="btn" href="itms-services://?action=download-manifest&amp;url=${BASE}manifest.plist">
+            <a class="btn" href="itms-services://?action=download-manifest&amp;url=${BASE}/manifest.plist">
               Test 1 &mdash; manifest.plist
             </a>
-            <a class="btn" href="itms-services://?action=download-manifest&amp;url=${BASE}manifest.xml">
+            <a class="btn" href="itms-services://?action=download-manifest&amp;url=${BASE}/manifest.xml">
               Test 2 &mdash; manifest.xml
             </a>
             <p><strong>The install will fail afterwards, and that is expected</strong> &mdash; the
             payload is a text file, not an app. The only thing being tested is whether the
             <em>prompt</em> appears.</p>
             <p>If a prompt appears for either, that content type works and the route is viable.</p>
+            <p><small>Measured on the first run: <code>.plist</code> is served as
+            <code>application/octet-stream</code>, <code>.xml</code> as <code>application/xml</code>,
+            and the payload as <code>application/octet-stream</code>. So Test&nbsp;2 is the one
+            expected to work.</small></p>
           </body>
           </html>
           HTML
