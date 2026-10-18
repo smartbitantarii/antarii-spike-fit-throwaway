@@ -72,6 +72,19 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# 🔴 THE RUNNER IMAGES ARE PINNED, AND IT IS THE SAME RULE AS EVERYTHING
+# ELSE HERE. `D1` pins the SQLCipher package "by name and version" because a
+# p95 that gates an ADR has to be reproducible, and the README pins every
+# container image for that reason too. **A floating `ubuntu-latest` is the same
+# defect in a different place**: GitHub warned on 2026-10-18 that the label
+# "will migrate to Ubuntu 26 beginning October 19, 2026", which would change
+# the Go toolchain, the JDK and the Android SDK under the Android build
+# OVERNIGHT — so Android figures taken either side of it would not be
+# comparable, and nothing would have announced the change.
+#
+# ➕ `macos-15` was already pinned; these two were not, which was an
+# oversight rather than a decision.
+
 env:
   # `D1` pins the SQLCipher package by name and version for reproducibility;
   # the toolchain is pinned for the same reason. Node 24 because the spike's
@@ -86,7 +99,7 @@ jobs:
   # ===========================================================================
   test:
     name: tests (incl. leg (ii) against real S3)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     services:
       # ⚠ THE PROPERTY NAMES MUST CARRY THE FULL PREFIX. s3mock 5.x binds this
@@ -175,7 +188,7 @@ jobs:
   android:
     name: android APK (release)
     if: github.event_name == 'workflow_dispatch' && inputs.android
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: test
     steps:
       - uses: actions/checkout@v4
