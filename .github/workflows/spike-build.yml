@@ -294,7 +294,9 @@ jobs:
             echo "" >&2
             echo "This build exports AD HOC, so the certificate must be an" >&2
             echo "Apple DISTRIBUTION certificate and the profile an Ad Hoc one" >&2
-            echo "carrying BOTH device UDIDs. A Development certificate will" >&2
+            echo "carrying THE IPHONE's UDID. SyR-210 is ONE device per platform" >&2
+            echo "- one Android handset and one iPhone - so there is a single" >&2
+            echo "iOS UDID, not two. A Development certificate will" >&2
             echo "fail at the export step, not here." >&2
             exit 1
           fi
@@ -327,8 +329,23 @@ jobs:
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
 
           printf '%s' "$CERT" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
-            -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          # ⚠ THE ERROR THIS GUARD EXISTS FOR IS ACTIVELY MISLEADING.
+          # OpenSSL 3 writes PKCS#12 with AES-256-CBC and a SHA-256 MAC,
+          # which older macOS cannot read, and the failure reads "MAC
+          # verification failed ... (wrong password?)" — so the obvious
+          # response is to go and check the password, which is careful,
+          # correct, and loses the build to the wrong suspect.
+          if ! security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN"  -P "$CERT_PASSWORD" -T /usr/bin/codesign; then
+            echo "" >&2
+            echo "The .p12 could not be imported." >&2
+            echo "" >&2
+            echo "If the message mentioned MAC verification or a wrong" >&2
+            echo "password, SUSPECT THE ALGORITHM BEFORE THE PASSWORD:" >&2
+            echo "re-export the .p12 adding OpenSSL's -legacy flag --" >&2
+            echo "  openssl pkcs12 -export -legacy -inkey KEY -in CERT.pem -out spike.p12" >&2
+            echo "-- then update IOS_CERTIFICATE_P12_BASE64. See the README." >&2
+            exit 1
+          fi
           security set-key-partition-list -S apple-tool:,apple: \
             -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
           security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
@@ -427,7 +444,7 @@ jobs:
             <key>compileBitcode</key><false/>
             <key>provisioningProfiles</key>
             <dict>
-              <key>com.antarii.spike</key><string>$PROFILE_NAME</string>
+              <key>com.smartbitit.antarii.spike</key><string>$PROFILE_NAME</string>
             </dict>
           </dict>
           </plist>

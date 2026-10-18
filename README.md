@@ -104,7 +104,7 @@ runner and push protection free — so **visibility is not the control; the appr
 |---|---|
 | `IOS_CERTIFICATE_P12_BASE64` | the **Apple Distribution** certificate + private key, as a base64 `.p12` |
 | `IOS_CERTIFICATE_PASSWORD` | the password set when exporting that `.p12` |
-| `IOS_PROVISIONING_PROFILE_BASE64` | an **Ad Hoc** provisioning profile for `com.antarii.spike`, base64, **including both device UDIDs** |
+| `IOS_PROVISIONING_PROFILE_BASE64` | an **Ad Hoc** provisioning profile for `com.smartbitit.antarii.spike`, base64, **including the iPhone's UDID** |
 | `APPLE_TEAM_ID` | the ten-character Team ID from the membership |
 
 🔴 **Add these in GitHub directly** — *Settings → Secrets and variables → Actions*. They must not
@@ -135,19 +135,32 @@ openssl req -new -key spike.key -out spike.csr -subj "/emailAddress=YOU/CN=Antar
    `spike.csr` → download `distribution.cer`.
    ⚠ **Distribution, not Development** — an **Ad Hoc** profile requires it, and an Ad Hoc profile
    is what an over-the-air install needs. A Development certificate fails at the export step.
-3. **Identifiers** → App ID `com.antarii.spike` → enable **NFC Tag Reading**.
+3. **Identifiers** → App ID `com.smartbitit.antarii.spike` → enable **NFC Tag Reading**.
    ⚠ Condition 4's NFC leg needs this, and NFC does **not** work with a wildcard App ID — it needs
    the explicit one, which we have. Enable it *before* creating the profile or the profile will not
    carry it.
 4. **Devices** → register **both** phones by UDID.
-5. **Profiles** → new **Ad Hoc** profile → App ID `com.antarii.spike` → select that certificate and
+5. **Profiles** → new **Ad Hoc** profile → App ID `com.smartbitit.antarii.spike` → select that certificate and
    **both** devices → download `spike.mobileprovision`.
 
 ```bash
 # 6. combine the downloaded certificate with the key into a .p12
 openssl x509 -in distribution.cer -inform DER -out distribution.pem -outform PEM
-openssl pkcs12 -export -inkey spike.key -in distribution.pem -out spike.p12
+openssl pkcs12 -export -legacy -inkey spike.key -in distribution.pem -out spike.p12
 ```
+
+> 🔴 **`-legacy` is not optional-looking boilerplate.** OpenSSL 3 exports PKCS#12 with
+> **AES-256-CBC and a SHA-256 MAC**, which **macOS 14 and earlier cannot import at all**. Apple
+> states macOS 15 was updated to read modern PKCS#12, and the runner is `macos-15` — but the
+> failure mode if that is wrong is a **twenty-minute build that dies at the import step** with
+> *“MAC verification failed … (wrong password?)”*, **a message that sends you hunting the password
+> rather than the algorithm**. `-legacy` works on every macOS version, and the weaker algorithms
+> are irrelevant here: the file exists for seconds inside a throwaway keychain that is destroyed
+> whether the build succeeds or fails.
+>
+> ⚠ One report notes `-legacy` can occasionally mis-format the bag attributes. The workflow
+> already guards that — it fails if `security find-identity` returns no codesigning identity
+> after the import.
 
 ```powershell
 # 7. base64 both, on Windows, into files you then paste from and delete

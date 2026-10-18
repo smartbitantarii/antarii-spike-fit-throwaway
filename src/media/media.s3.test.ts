@@ -129,6 +129,38 @@ class NodeFs implements Fs {
 }
 
 /**
+ * ⚠ EVERY REQUEST HERE HAS A DEADLINE, AND THAT IS NOT BELT AND BRACES.
+ *
+ * This file has hung for 90 seconds three times — twice while another run was
+ * using the same s3mock, and once with **no concurrent run and no stray
+ * process**, so the earlier "contention" explanation does not cover it and the
+ * cause is **still unidentified**.
+ *
+ * What IS identified is the defect: `fetch` has no default timeout, so a
+ * stalled connection is indistinguishable from a hang. The test did not fail,
+ * it *stopped*, taking the whole job's budget with it and reporting
+ * `'test failed'` with nothing to read. A deadline turns that into a named
+ * failure at a known line, which is the difference between a clue and a
+ * mystery — and in CI, between a 20-second red and a consumed runner.
+ *
+ * ➕ 30 s is deliberately generous: a 5 MiB part over a loopback Docker port
+ * takes well under a second, so anything approaching this is pathological
+ * rather than slow.
+ */
+const REQUEST_TIMEOUT_MS = 30_000;
+
+async function fetchOrFail(url: string, init: RequestInit = {}): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  } catch (err) {
+    const why = err instanceof Error && err.name === 'TimeoutError'
+      ? 'timed out after ' + REQUEST_TIMEOUT_MS + 'ms'
+      : String(err);
+    throw new Error('request to ' + url + ' ' + why);
+  }
+}
+
+/**
  * A grant good for one hand-off, obtained from the `1a` grant-issuing stub —
  * the real issuer ADR-003 §5.3.3 presumes, which is single-use AND
  * time-bounded, so a replay is refused even inside the TTL.
@@ -136,7 +168,7 @@ class NodeFs implements Fs {
 class StubGrants implements Grants {
   readonly minted: string[] = [];
   async mint(mediaId: string, part: number): Promise<string> {
-    const r = await fetch(STUBS + '/grant?mediaId=' + encodeURIComponent(mediaId) + '&part=' + part);
+    const r = await fetchOrFail(STUBS + '/grant?mediaId=' + encodeURIComponent(mediaId) + '&part=' + part);
     assert.equal(r.status, 200, 'the grant stub refused to issue');
     const body = (await r.json()) as { token: string; mediaId: string; part: number };
     assert.equal(body.mediaId, mediaId, 'the grant is for a different media item');
@@ -147,7 +179,7 @@ class StubGrants implements Grants {
 }
 
 async function redeem(token: string): Promise<number> {
-  const r = await fetch(STUBS + '/grant/redeem?token=' + encodeURIComponent(token));
+  const r = await fetchOrFail(STUBS + '/grant/redeem?token=' + encodeURIComponent(token));
   return r.status;
 }
 
@@ -193,7 +225,7 @@ class S3MultipartPlatform implements PlatformUpload {
   }
 
   async initiate(): Promise<void> {
-    const r = await fetch(this.url('?uploads'), { method: 'POST' });
+    const r = await fetchOrFail(this.url('?uploads'), { method: 'POST' });
     assert.equal(r.status, 200, 'initiate multipart');
     this.uploadId = tagOf(await r.text(), 'UploadId');
   }
@@ -221,7 +253,7 @@ class S3MultipartPlatform implements PlatformUpload {
     const idx = Number(file.path.split('.part')[1]);
     assert.ok(Number.isInteger(idx), 'cannot derive a part index from ' + file.path);
     const n = idx + 1; // S3 part numbers are 1-based
-    const r = await fetch(this.url('?partNumber=' + n + '&uploadId=' + this.uploadId), {
+    const r = await fetchOrFail(this.url('?partNumber=' + n + '&uploadId=' + this.uploadId), {
       method: 'PUT',
       body,
       // The grant travels WITH the request and is never stored on this object,
@@ -247,7 +279,7 @@ class S3MultipartPlatform implements PlatformUpload {
       .sort((a, b) => a.index - b.index)
       .map((p) => '<Part><PartNumber>' + (p.index + 1) + '</PartNumber><ETag>' + p.etag + '</ETag></Part>')
       .join('');
-    const r = await fetch(this.url('?uploadId=' + this.uploadId), {
+    const r = await fetchOrFail(this.url('?uploadId=' + this.uploadId), {
       method: 'POST',
       headers: { 'Content-Type': 'application/xml' },
       body: '<CompleteMultipartUpload>' + parts + '</CompleteMultipartUpload>',
@@ -258,7 +290,7 @@ class S3MultipartPlatform implements PlatformUpload {
   }
 
   async fetchObject(): Promise<Buffer> {
-    const r = await fetch(this.url(''));
+    const r = await fetchOrFail(this.url(''));
     assert.equal(r.status, 200, 'GET the completed object');
     return Buffer.from(await r.arrayBuffer());
   }
