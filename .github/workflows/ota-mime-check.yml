@@ -1,0 +1,197 @@
+# A DE-RISKING PROBE, NOT PART OF THE SPIKE. Delete once it has answered.
+#
+# ⚠ THE ONE QUESTION THIS EXISTS TO ANSWER. The install route under
+# consideration is an over-the-air install: CI publishes a signed `.ipa` plus a
+# `manifest.plist` over HTTPS, and the device installs from an
+# `itms-services://` link. iOS requires the manifest served as **text/xml** and
+# the package as **application/octet-stream**, and **GitHub Pages does not let
+# you set custom headers**. If Pages serves `manifest.plist` as
+# `application/octet-stream`, iOS refuses it — *silently*, which is the worst
+# kind of failure to discover later.
+#
+# ✅ So this probes it with a DUMMY payload, before any certificate exists.
+# Nothing here is signed, nothing real is exposed, and it costs nothing: Pages
+# is free on a public repository and this runs on `ubuntu-latest`.
+#
+# ➕ AND IT ANSWERS BOTH HALVES IN ONE DISPATCH. The same manifest is published
+# at **two extensions** — `manifest.plist` and `manifest.xml` — with identical
+# content. Pages picks the content type from the extension, so:
+#
+#   * both links prompt      -> the content type is fine either way
+#   * only the .xml prompts  -> it IS the MIME type, and `.xml` is the fix
+#   * neither prompts        -> something else is wrong (TLS, the plist shape,
+#                               or Pages is not serving at all)
+#
+# ⚠ HOW TO READ THE RESULT. The dummy `.ipa` is deliberately NOT a real app, so
+# the install WILL fail at the end. **That failure is the success signal.** The
+# thing being tested is whether iOS gets far enough to show
+# *«"…github.io" would like to install "Antarii OTA MIME CHECK"»*. If that
+# prompt appears, the manifest was fetched, parsed and accepted — which is the
+# whole question. What happens after you tap Install is irrelevant here.
+#
+# 🔴 ONE THING TO SET ONCE, BY HAND: Settings -> Pages -> Build and deployment
+# -> Source -> **GitHub Actions**. Without it the deploy step fails.
+
+name: OTA MIME check (de-risking probe)
+
+on:
+  workflow_dispatch:
+
+# Pages needs more than the default read. ⚠ Scoped to this workflow alone,
+# which is why the probe is a separate file rather than a job added to
+# `spike-build.yml` — that workflow holds `contents: read` and has no business
+# gaining deploy rights for a throwaway experiment.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deployment at a time, and do NOT cancel a running one: a
+# half-finished deploy would leave the site in a state that teaches us nothing.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # Gives the base URL BEFORE deploying, which the manifest needs: iOS
+      # requires absolute URLs inside the manifest, so it cannot be written
+      # until the host is known.
+      - name: configure pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: build the dummy site
+        env:
+          BASE: ${{ steps.pages.outputs.base_url }}
+        run: |
+          set -eu
+          mkdir -p site
+          echo "base url: $BASE"
+
+          # --- a dummy payload. Deliberately not a real app: the install must
+          # --- fail, and the PROMPT is what we are testing for.
+          printf 'This is not an application. It is a de-risking probe for the OTA install route.\n' > site/app.ipa
+
+          # --- the icons the manifest references. A 1x1 PNG is enough: iOS
+          # --- fetches them to draw the install placeholder, and we are not
+          # --- testing how it looks.
+          printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' | base64 -d > site/icon57.png
+          cp site/icon57.png site/icon512.png
+
+          # --- the manifest. Written once, then copied to a second extension
+          # --- so one dispatch tests both content types.
+          cat > site/manifest.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>items</key>
+            <array>
+              <dict>
+                <key>assets</key>
+                <array>
+                  <dict>
+                    <key>kind</key><string>software-package</string>
+                    <key>url</key><string>${BASE}app.ipa</string>
+                  </dict>
+                  <dict>
+                    <key>kind</key><string>display-image</string>
+                    <key>url</key><string>${BASE}icon57.png</string>
+                  </dict>
+                  <dict>
+                    <key>kind</key><string>full-size-image</string>
+                    <key>url</key><string>${BASE}icon512.png</string>
+                  </dict>
+                </array>
+                <key>metadata</key>
+                <dict>
+                  <key>bundle-identifier</key><string>com.antarii.spike.otaprobe</string>
+                  <key>bundle-version</key><string>0.0.1</string>
+                  <key>kind</key><string>software</string>
+                  <key>title</key><string>Antarii OTA MIME CHECK</string>
+                </dict>
+              </dict>
+            </array>
+          </dict>
+          </plist>
+          PLIST
+          cp site/manifest.plist site/manifest.xml
+
+          # ⚠ A tappable page is required, not a convenience: typing an
+          # `itms-services://` URL into Safari is awkward and on some versions
+          # does nothing at all, which would look like a failure of the thing
+          # we are testing rather than of the typing.
+          cat > site/index.html <<HTML
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Antarii OTA probe</title>
+            <style>
+              body { font: 17px/1.5 -apple-system, system-ui, sans-serif; margin: 0; padding: 24px; }
+              a.btn { display: block; padding: 16px; margin: 12px 0; border: 2px solid #595959;
+                      border-radius: 8px; text-align: center; text-decoration: none; color: #1a1a1a; }
+              p { color: #1a1a1a; }
+              code { font-size: 15px; word-break: break-all; }
+            </style>
+          </head>
+          <body>
+            <h1>OTA probe</h1>
+            <p><strong>Open this page on the iPhone.</strong> Tap each button in turn and note
+            whether an install prompt appears naming <em>Antarii OTA MIME CHECK</em>.</p>
+            <a class="btn" href="itms-services://?action=download-manifest&amp;url=${BASE}manifest.plist">
+              Test 1 &mdash; manifest.plist
+            </a>
+            <a class="btn" href="itms-services://?action=download-manifest&amp;url=${BASE}manifest.xml">
+              Test 2 &mdash; manifest.xml
+            </a>
+            <p><strong>The install will fail afterwards, and that is expected</strong> &mdash; the
+            payload is a text file, not an app. The only thing being tested is whether the
+            <em>prompt</em> appears.</p>
+            <p>If a prompt appears for either, that content type works and the route is viable.</p>
+          </body>
+          </html>
+          HTML
+
+          ls -la site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      # Everything needed to run the test, in the place the operator will look.
+      - name: what to do next
+        env:
+          URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          {
+            echo "## OTA MIME check — open this on the iPhone"
+            echo ""
+            echo "**$URL**"
+            echo ""
+            echo "Tap each button and record whether an install prompt appears"
+            echo "naming \`Antarii OTA MIME CHECK\`."
+            echo ""
+            echo "| Result | What it means |"
+            echo "|---|---|"
+            echo "| both prompt | content type is fine; the route is viable as designed |"
+            echo "| only \`.xml\` prompts | it IS the MIME type — serve the manifest as \`.xml\` |"
+            echo "| neither prompts | not the MIME type — TLS, the plist shape, or Pages itself |"
+            echo ""
+            echo "The install failing AFTER the prompt is expected: the payload is a text file."
+            echo ""
+            echo "### When it has answered"
+            echo "Delete this workflow and redeploy an empty site — it is a probe, not a feature."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "open on the iPhone: $URL"

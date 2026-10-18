@@ -105,8 +105,16 @@ should be a deliberate act against a known commit.*
 be pasted into a chat, a file, or a commit. ADR-012 §6.6 rule 5: *"the key is never in the
 repository"*; rule 1: *"receive the signing material as an injected secret and **retain nothing
 after the build**"*, which the workflow honours with a throwaway keychain destroyed in an
-`if: always()` step so a **failed** run leaks nothing either. `D5`: a **development** identity,
-separately revocable — **the distribution certificate never leaves the owner's keychain.**
+`if: always()` step so a **failed** run leaks nothing either. Rule 5 also requires **a second copy
+held apart from the first**, the signing key being the one secret whose loss rotation cannot repair.
+
+> ⚠ **A correction.** This section previously said *"`D5`: a **development** identity, separately
+> revocable — the distribution certificate never leaves the owner's keychain."* ✕ **`D5` is the
+> spike REPOSITORY**, not a signing identity, and that discipline appears **nowhere in the corpus**.
+> It is no longer cited as a rule. **Which identity to use is an open question**, because an
+> **Ad Hoc** profile — what an over-the-air install needs — requires an Apple **Distribution**
+> certificate, as does TestFlight; only a **Development** profile uses a development certificate,
+> and installing one needs a Mac.
 
 **No Mac is needed for any of this** (`O2`), so the steps below use OpenSSL rather than Keychain
 Access:
@@ -145,9 +153,14 @@ apart from the first"*.
   has to be fetched from CI and installed on the device, so the install route is now part of the
   setup"*. **Fetching the `.ipa` is easy; installing it on an iPhone from Windows has no
   first-party route** — Apple Configurator and Xcode's device window are both macOS-only. The
-  realistic options are **TestFlight internal testing** (which changes the signing identity, so it
-  touches `D5`) or **a Mac for the install step only** (which `O2` said was not needed *for
-  building*, and this is not building). **An owner decision, not an assumption to make here.**
+  realistic options are **(a) an over-the-air install** from an `itms-services://` link, **(b)
+  TestFlight internal testing**, or **(c) a Mac for the install step only** (which `O2` said was not
+  needed *for **building***, and installing is not building).
+  ⚠ **(a) and (b) both need an Apple DISTRIBUTION certificate** — an Ad Hoc profile requires one,
+  and so does App Store Connect — **so only (c) keeps a distribution certificate out of CI**.
+  ✕ *Third-party Windows sideloaders are rejected: they **re-sign** the app, changing the artefact
+  being measured, and free-account signing expires in about a week.*
+  **An owner decision, not an assumption to make here.**
 - **Both devices need a device lock set**, because ADR-003 §5.3.4 decided the application *"refuses
   to hold tenant data without one"* — **a phone with no passcode cannot run the spike at all.**
 

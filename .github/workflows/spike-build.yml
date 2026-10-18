@@ -265,9 +265,13 @@ jobs:
             echo "These are the owner's to supply and cannot be generated here." >&2
             echo "ADR-012 6.6 rule 1: the signing material is received as an" >&2
             echo "injected secret and NOTHING is retained after the build." >&2
-            echo "ADR-012 6.6 rule 5: the key is never in the repository." >&2
-            echo "D5: a DEVELOPMENT identity, separately revocable - the" >&2
-            echo "distribution certificate never leaves the owner's keychain." >&2
+            echo "ADR-012 6.6 rule 5: the key is never in the repository," >&2
+            echo "and a second copy is held apart from the first." >&2
+            echo "" >&2
+            echo "WHICH identity to use is OPEN - see the install-route item." >&2
+            echo "An Ad Hoc or App Store profile needs an Apple DISTRIBUTION" >&2
+            echo "certificate; only a Development profile uses a development" >&2
+            echo "one, and that route needs a Mac to install from." >&2
             exit 1
           fi
 
@@ -357,9 +361,25 @@ jobs:
             CODE_SIGN_IDENTITY="$SIGN_ID" \
             archive
 
-      # `development` because D5's discipline is a separately revocable
-      # DEVELOPMENT identity; the distribution certificate never leaves the
-      # owner's keychain and must not be used here.
+      # ⚠ `development` IS PROVISIONAL AND THE CHOICE IS OPEN.
+      #
+      # A correction is recorded here because this comment previously cited
+      # `D5` for "a separately revocable development identity, the
+      # distribution certificate never leaving the owner's keychain".
+      # ✕ **`D5` is the spike REPOSITORY**, not a signing identity, and that
+      # discipline is not written anywhere in the corpus. It may have been
+      # said and never recorded, or it may have been invented here; either
+      # way it is not a citable rule and is not cited.
+      #
+      # The VERIFIED constraint is ADR-012 §6.6 rule 5: "the key is never in
+      # the repository" and "a second copy is held apart from the first" —
+      # which a CI secret does not breach.
+      #
+      # ⚠ And the choice has a cost either way: **an Ad Hoc profile, which
+      # is what an over-the-air install needs, requires an Apple
+      # DISTRIBUTION certificate**, as does TestFlight. Only a Development
+      # profile uses a development certificate, and installing one needs a
+      # Mac. `development` stands here until the install route is decided.
       - name: export the IPA
         run: |
           cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
@@ -392,7 +412,7 @@ jobs:
           {
             "platform": "ios",
             "configuration": "Release",
-            "signing": "development identity (D5) - separately revocable",
+            "signing": "development profile (provisional - install route undecided)",
             "commit": "${{ github.sha }}",
             "ref": "${{ github.ref }}",
             "runId": "${{ github.run_id }}",
