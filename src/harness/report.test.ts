@@ -1,0 +1,213 @@
+/**
+ * Tests for §8's record shape.
+ * Run: node --test src/harness/report.test.ts
+ *
+ * ⚠ Several of these assert that a field is REQUIRED. That is the point of
+ * the module: four of §8's lines exist because a review found them missing,
+ * and a record that can omit them silently would repeat the finding.
+ */
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { validateRecord, emitRecord, serialiseRecord, type RunRecord } from './report.ts';
+import { TARGET_MS, type Figure } from './harness.ts';
+
+function figure(seq: 'S1' = 'S1', n = 100): Figure {
+  return {
+    seq,
+    condition: 1,
+    targetMs: TARGET_MS[seq],
+    n,
+    p95Ms: 120,
+    samplesMs: new Array(n).fill(120),
+    discardedWarmupMs: [200],
+    pass: true,
+    context: { buildId: 'N', device: 'Galaxy M04', fill: '80%', offline: true },
+  };
+}
+
+function goodRecord(): RunRecord {
+  return {
+    date: '2026-10-19T10:00:00.000Z',
+    device: {
+      platform: 'android',
+      capability: 'mid-tier Android, ~3y, ~4 GB',
+      model: 'Galaxy M04',
+      osVersion: 'UP1A.231005.007.M045FXXSCEYG1',
+      deviation: 'weaker than baseline',
+    },
+    formShape: { sections: 3, visibleFieldsInLargestSection: 20, repeatsGrownTo: 50 },
+    worklistVolume: 200,
+    offline: true,
+    buildId: 'N',
+    expoSdkVersion: '58.0.11',
+    reactNativeVersion: '0.88.0',
+    sequenceSteps: { S1: ['open the form', 'wait for the first field to accept input'] },
+    batches: [
+      {
+        sequences: ['S1'],
+        fillAtStart: { recordBytes: 1, mediaBytes: 1, percentOfBudget: 80 },
+        fillAtEnd: { recordBytes: 1, mediaBytes: 2, percentOfBudget: 83 },
+        figures: [figure()],
+        conditions: { iterations: 101, warmupDiscarded: 1, settleMs: 0 },
+      },
+    ],
+    saveStopEvent: 'durable in the device store — the write committed, not queued (brief §6c)',
+    axis5: { step3: 'pass', step5aAt80Percent: 'pass', differenceFinding: null },
+    footprint: { withWasmBytes: 40_000_000, withoutWasmBytes: 31_000_000 },
+    decisions: {
+      d1Package: 'expo-sqlite 58.0.13 with useSQLCipher',
+      d2ConfigPlugin: "expo-sqlite's own first-party plugin; none written",
+      d3LicenceVerbatim: 'BSD-style, from the licence file',
+      d3Edition: 'community',
+    },
+    failures: [],
+  };
+}
+
+test('a complete record validates and emits', () => {
+  const r = goodRecord();
+  assert.deepEqual(validateRecord(r), []);
+  const json = emitRecord(r);
+  assert.ok(json.includes('Galaxy M04'));
+  assert.equal(JSON.parse(json).worklistVolume, 200);
+});
+
+test('an incomplete record is REFUSED, not emitted with gaps', () => {
+  const r = goodRecord();
+  r.saveStopEvent = '';
+  assert.throws(() => emitRecord(r), /incomplete and will not be emitted/);
+  assert.throws(() => emitRecord(r), /m6: the stop event/);
+});
+
+test('every problem is reported at once, not the first one found', () => {
+  const r = goodRecord();
+  r.date = '';
+  r.worklistVolume = Number.NaN;
+  r.saveStopEvent = '';
+  const problems = validateRecord(r);
+  assert.ok(problems.length >= 3, 'got: ' + problems.join(' | '));
+});
+
+// --------------------------- the four fields a review had to restore
+
+test("M7: the device's CAPABILITY is required, not just the model", () => {
+  const r = goodRecord();
+  r.device.capability = '';
+  assert.match(validateRecord(r).join('|'), /CAPABILITY is missing/);
+});
+
+test("M7: the form's shape is three numbers, not one", () => {
+  const r = goodRecord();
+  r.formShape.visibleFieldsInLargestSection = 0;
+  assert.match(validateRecord(r).join('|'), /visible fields in the largest section/);
+});
+
+test('M7: the scripted steps are listed WITH the record, not referenced', () => {
+  const r = goodRecord();
+  r.sequenceSteps = {};
+  assert.match(validateRecord(r).join('|'), /must be LISTED WITH the record/);
+});
+
+test('m3: the fill is recorded at the start AND end of each batch', () => {
+  const r = goodRecord();
+  // @ts-expect-error deliberately removing a required field
+  delete r.batches[0].fillAtEnd;
+  assert.match(validateRecord(r).join('|'), /START AND END, not once/);
+});
+
+test('M4: axis 5 is recorded twice, not once', () => {
+  const r = goodRecord();
+  r.axis5.step5aAt80Percent = '';
+  assert.match(validateRecord(r).join('|'), /axis 5 is recorded TWICE/);
+});
+
+test("m6: condition 1's save figure carries the stop event it was measured against", () => {
+  // Because §6c's definition is stricter than SwR-100's, a fail there is a
+  // fail against a definition no requirement sets.
+  const r = goodRecord();
+  assert.ok(r.saveStopEvent.includes('not queued'));
+  r.saveStopEvent = '';
+  assert.match(validateRecord(r).join('|'), /m6/);
+});
+
+// --------------------------------------------- the failure attribution
+
+test("§7 rule 4: 'vendor' is permitted on axis 5 ONLY", () => {
+  const r = goodRecord();
+  r.failures = [{
+    condition: 1,
+    figureOrLeg: 'S1',
+    measured: '420ms',
+    cause: 'vendor',
+    handset: 'Galaxy M04',
+    batterySetting: 'unrestricted',
+    axis5: false,
+  }];
+  assert.match(validateRecord(r).join('|'), /'vendor' is permitted on axis 5 only/);
+
+  r.failures[0]!.axis5 = true;
+  assert.deepEqual(validateRecord(r), [], 'on axis 5 it is allowed');
+});
+
+test('FN5: a failure names the handset AND its battery setting', () => {
+  const r = goodRecord();
+  r.failures = [{
+    condition: 2, figureOrLeg: 'S6', measured: '500ms', cause: 'prototype',
+    handset: 'Galaxy M04', batterySetting: '', axis5: false,
+  }];
+  assert.match(validateRecord(r).join('|'), /names the handset AND its battery setting/);
+});
+
+// ------------------------------------------------------ the decisions
+
+test('D3: a commercial edition must record the price; community need not', () => {
+  const r = goodRecord();
+  r.decisions.d3Edition = 'commercial';
+  assert.match(validateRecord(r).join('|'), /commercial edition must record the price/);
+  r.decisions.d3Price = '£0';
+  assert.deepEqual(validateRecord(r), []);
+});
+
+test('D1/D2/D3 are required, being decisions rather than measurements', () => {
+  const r = goodRecord();
+  r.decisions.d1Package = '';
+  r.decisions.d3LicenceVerbatim = '';
+  const p = validateRecord(r).join('|');
+  assert.match(p, /D1/);
+  assert.match(p, /VERBATIM/);
+});
+
+// --------------------------------------------------------- not-established
+
+test('a figure with a null p95 is VALID — "Not established" is a verdict, not an error', () => {
+  const r = goodRecord();
+  const f = figure('S1', 40);
+  f.p95Ms = null;
+  f.pass = null;
+  r.batches[0]!.figures = [f];
+  assert.deepEqual(validateRecord(r), [], 'the record may carry an unestablished figure');
+});
+
+test('serialisation is stable, so two records of one run compare byte for byte', () => {
+  assert.equal(serialiseRecord(goodRecord()), serialiseRecord(goodRecord()));
+});
+
+test('🔴 serialisation keeps NESTED fields — the allowlist bug that emitted a husk', () => {
+  // The first serialiser passed `Object.keys(r).sort()` as stringify's second
+  // argument, which is an allowlist applied at EVERY level, so everything
+  // nested was dropped. The record validated and then emitted almost empty.
+  const json = emitRecord(goodRecord());
+  const back = JSON.parse(json);
+  assert.equal(back.device.model, 'Galaxy M04', 'nested device fields must survive');
+  assert.equal(back.formShape.repeatsGrownTo, 50);
+  assert.equal(back.batches[0].figures[0].n, 100);
+  assert.equal(back.decisions.d1Package, 'expo-sqlite 58.0.13 with useSQLCipher');
+  assert.equal(back.batches[0].fillAtEnd.percentOfBudget, 83);
+});
+
+test('arrays keep their order — a sorted time series would be meaningless', () => {
+  const r = goodRecord();
+  r.batches[0]!.figures[0]!.samplesMs = [300, 100, 200];
+  const back = JSON.parse(serialiseRecord(r));
+  assert.deepEqual(back.batches[0].figures[0].samplesMs, [300, 100, 200]);
+});
