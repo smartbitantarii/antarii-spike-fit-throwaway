@@ -262,8 +262,18 @@ function sortDeep(v: unknown): unknown {
   return v;
 }
 
+/**
+ * Stable JSON for anything the device sends — a full record or a device
+ * payload. ➕ Taking `unknown` rather than `RunRecord` because both travel the
+ * same way and the alternative was a cast at the call site, which is where a
+ * cast stops being a note and starts being a lie.
+ */
+export function stableJson(value: unknown): string {
+  return JSON.stringify(sortDeep(value), null, 2);
+}
+
 export function serialiseRecord(r: RunRecord): string {
-  return JSON.stringify(sortDeep(r), null, 2);
+  return stableJson(r);
 }
 
 /**
@@ -293,5 +303,59 @@ export function partialRecordFromHarness(
     buildId: context.buildId,
     offline: context.offline,
     batches,
+  };
+}
+
+/**
+ * 🔴 WHAT THE DEVICE IS SENDING, STATED IN THE PAYLOAD ITSELF.
+ *
+ * The app marks S1, S3 and S6 during ORDINARY USE — opening the form, saving
+ * an answer, re-evaluating. Those marks are real timings and they are **not a
+ * measurement**: there is no warm-up discarded, no controlled fill, no
+ * §6a sample, and the device was being poked by hand. A payload that did not
+ * say so could be read later as figures, and **a p95 over incidental marks
+ * would look exactly like a p95 over a campaign**.
+ *
+ * ➕ So the kind travels with the data rather than in someone's memory of how
+ * it was produced. Whatever assembles §8's record can then refuse to treat
+ * `incidental-marks` as figures, instead of trusting a filename or a note.
+ */
+export type DevicePayloadKind = 'campaign' | 'incidental-marks';
+
+export interface DevicePayload {
+  kind: DevicePayloadKind;
+  /** why this kind, in words, so the record is self-explaining */
+  kindNote: string;
+  date: string;
+  buildId: string;
+  device: { model: string };
+  offline: boolean;
+  fill: string;
+  figures: Figure[];
+}
+
+const KIND_NOTE: Readonly<Record<DevicePayloadKind, string>> = Object.freeze({
+  campaign:
+    'a driven campaign: §6a’s n per figure with the warm-up discarded. Eligible to become a §8 figure.',
+  'incidental-marks':
+    'NOT A MEASUREMENT — marks taken while the app was used by hand. No warm-up discarded, ' +
+    'no controlled fill, no §6a sample. Must not be read as a figure.',
+});
+
+export function devicePayload(
+  kind: DevicePayloadKind,
+  context: RunContext,
+  figures: Figure[],
+  atIso: string = new Date().toISOString(),
+): DevicePayload {
+  return {
+    kind,
+    kindNote: KIND_NOTE[kind],
+    date: atIso,
+    buildId: context.buildId,
+    device: { model: context.device },
+    offline: context.offline,
+    fill: context.fill,
+    figures,
   };
 }

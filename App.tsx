@@ -13,6 +13,7 @@ import React from 'react';
 import {
   ScrollView,
   Text,
+  TextInput,
   Pressable,
   View,
   Image,
@@ -30,6 +31,14 @@ import { spikeForm } from './src/form/spike-form.ts';
 import { BUILD_ID } from './src/build.ts';
 import { planCapture, SHIPPED_LAYERS, LOCATION_UNAVAILABLE } from './src/media/prepare.ts';
 import { captureAndPrepare, type CaptureResult } from './src/platform/expo-media.ts';
+import { devicePayload, stableJson } from './src/harness/report.ts';
+import { deliver } from './src/harness/delivery.ts';
+import {
+  expoPost,
+  writeFigureFallback,
+  readCollectorBase,
+  saveCollectorBase,
+} from './src/platform/expo-delivery.ts';
 import { ProfilePreference, type Profile } from './src/ui/profile.ts';
 import { repeatingPresentation, type RepeatingPresentation } from './src/ui/presentation.ts';
 import { FieldWidget, ProfileSwitch } from './src/ui/widgets.tsx';
@@ -99,6 +108,61 @@ export default function App(): React.JSX.Element {
     // result there is no stop, so no sample is recorded.
     if (result) setCapture(result);
   }, [harness]);
+
+  /**
+   * Getting what the harness holds off the device.
+   *
+   * 🔴 WHAT THIS SENDS IS *NOT* A MEASUREMENT, AND IT SAYS SO.
+   * The app marks S1, S3 and S6 while the form is used by hand. Those are
+   * real timings and they are not figures: no warm-up discarded, no
+   * controlled fill, no §6a sample. The payload carries
+   * `kind: 'incidental-marks'` so nothing downstream can mistake them for a
+   * campaign's result — **a p95 over incidental marks looks exactly like a
+   * p95 over a campaign**.
+   *
+   * ⚠ The address is typed in because the development machine's LAN address
+   * moves between networks, and because on a phone `localhost` is the phone.
+   */
+  const [collector, setCollector] = React.useState<string>('');
+  const [delivery, setDelivery] = React.useState<string>('');
+
+  React.useEffect(() => {
+    setCollector(readCollectorBase());
+  }, []);
+
+  const onDeliver = React.useCallback(async () => {
+    setDelivery('working\u2026');
+    try {
+      await saveCollectorBase(collector);
+
+      // ⚠ `record()` asserts nothing is still being timed. A mark left open
+      // would otherwise be delivered as a silently short figure.
+      const taken = harness.record();
+      const payload = devicePayload('incidental-marks', context, taken.figures);
+      const json = stableJson(payload);
+
+      const outcome = await deliver(
+        json,
+        collector,
+        expoPost,
+        { buildId: context.buildId, device: context.device },
+        // On a phone, always. The loopback guard exists for this call.
+        { onDevice: true },
+      );
+
+      if (outcome.delivered) {
+        setDelivery('delivered: ' + (outcome.stored ?? 'accepted'));
+        return;
+      }
+
+      // 🔴 Never lost. The collector could not take it, so it goes to
+      // the device and the operator is told exactly where.
+      const uri = await writeFigureFallback(outcome.fallbackFilename!, json);
+      setDelivery('NOT delivered (' + outcome.reason + ') \u2014 written to ' + uri);
+    } catch (err) {
+      setDelivery('failed: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  }, [collector, harness]);
   const onSwitchProfile = React.useCallback(
     (next: Profile) => {
       pref.switchTo(next);
@@ -214,6 +278,30 @@ export default function App(): React.JSX.Element {
       thumb arc is also horizontal; the far corner is what condition 3 has to
       look at on a device.
     */}
+    {/*
+      ⚠ Deliberately NOT in the thumb zone. SyR-221 reserves that band for
+      "the actions used most often during capture"; delivering figures is an
+      operator action between runs, and putting it under the thumb would make
+      it easy to hit by accident during a measured sequence.
+    */}
+    <View style={styles.collectorBar}>
+      <Text style={styles.note}>collector (the dev machine's LAN address)</Text>
+      <TextInput
+        style={styles.collectorInput}
+        value={collector}
+        onChangeText={setCollector}
+        placeholder="http://192.168.1.50:8080"
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="url"
+        accessibilityLabel="Collector address"
+      />
+      <Pressable onPress={onDeliver} style={styles.capture} accessibilityRole="button">
+        <Text>Deliver marks (not a measurement)</Text>
+      </Pressable>
+      {delivery ? <Text style={styles.note}>{delivery}</Text> : null}
+    </View>
+
     <View style={styles.thumbZone}>
       {/*
         Both of these are in `PRIMARY_CAPTURE_ACTIONS`, which is why they are
@@ -271,6 +359,15 @@ const styles = StyleSheet.create({
   // dimension and colour a widget uses now comes from `profile.ts`'s tokens,
   // which is what makes `presentation.test.ts` evidence about what renders.
   thumbZone: { padding: 12 },
+  collectorBar: { paddingHorizontal: 12, paddingTop: 8 },
+  collectorInput: {
+    borderWidth: 1,
+    borderColor: '#595959',
+    borderRadius: 4,
+    paddingHorizontal: 8,
+    minHeight: 44,
+    marginVertical: 4,
+  },
   capture: { paddingVertical: 12, alignItems: 'center' },
   thumbRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   thumb: { width: 64, height: 64, borderRadius: 4 },

@@ -8,7 +8,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateRecord, emitRecord, serialiseRecord, type RunRecord } from './report.ts';
+import { validateRecord, emitRecord, serialiseRecord, devicePayload, type RunRecord } from './report.ts';
 import { TARGET_MS, type Figure } from './harness.ts';
 
 function figure(seq: 'S1' = 'S1', n = 100): Figure {
@@ -210,4 +210,29 @@ test('arrays keep their order — a sorted time series would be meaningless', ()
   r.batches[0]!.figures[0]!.samplesMs = [300, 100, 200];
   const back = JSON.parse(serialiseRecord(r));
   assert.deepEqual(back.batches[0].figures[0].samplesMs, [300, 100, 200]);
+});
+
+test('🔴 a device payload SAYS whether it is a campaign or incidental marks', () => {
+  const ctx = { buildId: 'N', device: 'Galaxy M04', fill: 'none', offline: true };
+  const marks = devicePayload('incidental-marks', ctx, [figure()]);
+  assert.equal(marks.kind, 'incidental-marks');
+  assert.match(marks.kindNote, /NOT A MEASUREMENT/);
+  assert.match(marks.kindNote, /Must not be read as a figure/);
+
+  const campaign = devicePayload('campaign', ctx, [figure()]);
+  assert.equal(campaign.kind, 'campaign');
+  assert.match(campaign.kindNote, /warm-up discarded/);
+  // ⚠ The note differs by kind, so the distinction survives into the file
+  // rather than living in whoever remembers how the run was produced.
+  assert.notEqual(marks.kindNote, campaign.kindNote);
+});
+
+test('the payload carries the run context a figure is meaningless without', () => {
+  const ctx = { buildId: 'N+1', device: 'iPhone 13', fill: '80%', offline: false };
+  const p = devicePayload('campaign', ctx, [figure()], '2026-10-19T12:00:00.000Z');
+  assert.equal(p.buildId, 'N+1');
+  assert.equal(p.device.model, 'iPhone 13');
+  assert.equal(p.fill, '80%');
+  assert.equal(p.offline, false);
+  assert.equal(p.date, '2026-10-19T12:00:00.000Z');
 });
