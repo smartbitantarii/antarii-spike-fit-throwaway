@@ -307,6 +307,51 @@ jobs:
 
       - run: npm ci
 
+      # 🔴 THE RUNNER DEFAULTS TO AN XCODE TOO OLD FOR THIS SDK.
+      #
+      # The first archive attempt died in ReactCodegen's script phase on
+      # **Xcode 16.4 with the iOS 18.5 SDK**. That is not a signing fault
+      # and not a code fault: **Expo SDK 58 documents a minimum of Xcode
+      # 26.4**, so the toolchain was ten major versions behind the SDK and
+      # the codegen phase was simply the first thing to break.
+      #
+      # ➕ This DISCOVERS what the image carries rather than hard-coding a
+      # path, because a pinned `/Applications/Xcode_26.4.app` would break
+      # silently the day the image changes -- the same floating-version
+      # defect as `ubuntu-latest`, which bit this workflow once already.
+      #
+      # ⚠ And if nothing suitable exists it FAILS WITH THE LIST, so one run
+      # tells us whether to move to a newer runner label instead of leaving
+      # us guessing from a codegen error ten steps downstream.
+      - name: select an Xcode new enough for Expo SDK 58
+        run: |
+          set -eu
+          echo "default before selection: $(xcodebuild -version | head -1)"
+          echo "installed Xcodes:"
+          best=""; best_n=0; best_v=""
+          for app in /Applications/Xcode*.app; do
+            [ -d "$app" ] || continue
+            v=$(/usr/bin/defaults read "$app/Contents/Info" CFBundleShortVersionString 2>/dev/null) || continue
+            maj=${v%%.*}
+            case "$v" in *.*) rest=${v#*.}; min=${rest%%.*} ;; *) min=0 ;; esac
+            case "$maj" in ''|*[!0-9]*) continue ;; esac
+            case "$min" in ''|*[!0-9]*) min=0 ;; esac
+            n=$(( maj * 1000 + min ))
+            echo "  $v  $app"
+            if [ "$n" -gt "$best_n" ]; then best_n=$n; best="$app"; best_v="$v"; fi
+          done
+          # 26.4 -> 26 * 1000 + 4
+          if [ "$best_n" -lt 26004 ]; then
+            echo "" >&2
+            echo "No Xcode >= 26.4 on this runner (best found: ${best_v:-none})." >&2
+            echo "Expo SDK 58 documents 26.4 as its minimum, so this image" >&2
+            echo "cannot build it. Move the ios job to a newer runner label" >&2
+            echo "(for example macos-26) rather than pinning an Xcode path." >&2
+            exit 1
+          fi
+          echo "DEVELOPER_DIR=$best/Contents/Developer" >> "$GITHUB_ENV"
+          echo "selected: $best_v  ($best)"
+      
       - name: expo prebuild (ios)
         run: npx expo prebuild --platform ios --clean
 
