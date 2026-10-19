@@ -253,7 +253,17 @@ jobs:
   ios:
     name: iOS IPA (release, ad hoc)
     if: github.event_name == 'workflow_dispatch' && inputs.ios
-    runs-on: macos-15
+    runs-on: macos-26
+    # ✅ macos-26, pinned, DECIDED BY EVIDENCE RATHER THAN HOPE.
+    # The selection step below listed what macos-15 actually carries:
+    # twenty Xcodes, the newest of them 26.3. Expo SDK 58 documents 26.4
+    # as its minimum, so that image CANNOT build this SDK, one minor
+    # version short. macos-26 ships 26.4 and 26.4.1.
+    #
+    # ➕ Pinned, not `macos-latest`: that label is scheduled to move to
+    # macos-26 anyway, and a label that moves on someone else's schedule
+    # is the same defect as `ubuntu-latest`, which changed this
+    # workflow's toolchain under it once already.
     needs: test
     # 🔴 THE APPROVAL GATE ON THE SIGNING MATERIAL. The secrets below
     # live in this ENVIRONMENT, not in the repository, and the environment
@@ -326,7 +336,10 @@ jobs:
       - name: select an Xcode new enough for Expo SDK 58
         run: |
           set -eu
-          echo "default before selection: $(xcodebuild -version | head -1)"
+          # ⚠ awk, not `head`: `head` closes the pipe after one line and
+          # xcodebuild dies writing to it, spraying an NSException stack trace
+          # through the log. Harmless, but it looks exactly like a real crash.
+          echo "default before selection: $(xcodebuild -version | awk 'NR==1')"
           echo "installed Xcodes:"
           best=""; best_n=0; best_v=""
           for app in /Applications/Xcode*.app; do
