@@ -328,7 +328,46 @@ jobs:
           security set-keychain-settings -lut 3600 "$KEYCHAIN"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
 
-          printf '%s' "$CERT" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          # 🔴 WHY THIS IS NOT JUST `base64 --decode`.
+          # The first real run died here with "error decoding base64 input
+          # stream", because the secret had been produced on Windows with
+          #     [Convert]::ToBase64String(...) > file.txt
+          # and PowerShell's `>` writes a UTF-8 BOM. Three invisible bytes at
+          # the front, none of them valid base64. Measured, not guessed: that
+          # redirect produced 405 bytes where the base64 was 400.
+          #
+          # ➕ So the decode now DISCARDS anything outside the base64 alphabet
+          # -- a BOM, newlines, stray spaces from a copy-paste -- and then
+          # proves the result is really a DER blob rather than trusting that
+          # it decoded to something. It also reports how many characters it
+          # had to strip, which is the tell for a mangled secret.
+          #
+          # ⚠ It prints LENGTHS ONLY. Nothing here may echo a secret.
+          decode_secret() {
+            python3 - "$1" "$2" "$3" <<'DECODE'
+          import base64, os, re, sys
+          var, out, human = sys.argv[1], sys.argv[2], sys.argv[3]
+          raw = os.environ.get(var, "")
+          clean = re.sub(r"[^A-Za-z0-9+/=]", "", raw)
+          stripped = len(raw) - len(clean)
+          if not clean:
+              sys.exit(human + ": the secret is empty once non-base64 characters are removed")
+          try:
+              data = base64.b64decode(clean, validate=True)
+          except Exception as e:
+              sys.exit(human + ": still not valid base64 after cleaning (" + str(e) + ")")
+          if len(data) < 256:
+              sys.exit(human + ": decoded to only %d bytes, which is too small to be real" % len(data))
+          if data[0] != 0x30:
+              sys.exit(human + ": decoded, but does not start with a DER SEQUENCE (0x%02x). "
+                       "The secret is base64 of the wrong thing -- perhaps a .cer, a .pem, "
+                       "or the text of a file rather than its bytes." % data[0])
+          open(out, "wb").write(data)
+          print("%s: %d bytes, %d non-base64 characters stripped" % (human, len(data), stripped))
+          DECODE
+          }
+          
+          decode_secret CERT "$RUNNER_TEMP/cert.p12" "the certificate (.p12)"
           # ⚠ THE ERROR THIS GUARD EXISTS FOR IS ACTIVELY MISLEADING.
           # OpenSSL 3 writes PKCS#12 with AES-256-CBC and a SHA-256 MAC,
           # which older macOS cannot read, and the failure reads "MAC
@@ -356,7 +395,7 @@ jobs:
 
           PROFILES="$HOME/Library/MobileDevice/Provisioning Profiles"
           mkdir -p "$PROFILES"
-          printf '%s' "$PROFILE" | base64 --decode > "$PROFILES/spike.mobileprovision"
+          decode_secret PROFILE "$PROFILES/spike.mobileprovision" "the provisioning profile"
 
           # ➕ READ the profile's name and the identity, rather than guessing
           # either. Manual signing needs PROVISIONING_PROFILE_SPECIFIER, and
