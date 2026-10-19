@@ -357,7 +357,11 @@ jobs:
           except Exception as e:
               sys.exit(human + ": still not valid base64 after cleaning (" + str(e) + ")")
           if len(data) < 256:
-              sys.exit(human + ": decoded to only %d bytes, which is too small to be real" % len(data))
+              sys.exit(human + ": decoded to only %d bytes from %d base64 characters. "
+             "A real .p12 is about 2.5-4 KB and a profile about 8-12 KB, so this is "
+             "not the file -- it is roughly the length of a PATH or a single line of "
+             "text. Check you pasted the base64 ITSELF, not a filename, a path, or one "
+             "line of a wrapped file." % (len(data), len(clean)))
           if data[0] != 0x30:
               sys.exit(human + ": decoded, but does not start with a DER SEQUENCE (0x%02x). "
                        "The secret is base64 of the wrong thing -- perhaps a .cer, a .pem, "
