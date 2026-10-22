@@ -209,7 +209,17 @@ func figuresDir() string {
 	if v := os.Getenv("FIGURES_DIR"); v != "" {
 		return v
 	}
-	return "/figures"
+	// ⚠ RELATIVE, NOT "/figures". The absolute path is right only inside the
+	// container, where the compose file bind-mounts it and sets FIGURES_DIR
+	// explicitly anyway. As a DEFAULT it meant the filesystem root, which this
+	// stub cannot create when it runs as a bare process -- which is exactly how
+	// CI runs it, and CI is where that failed:
+	//
+	//     cannot create /figures: mkdir /figures: permission denied
+	//
+	// A relative directory is writable wherever the stub is started from, and
+	// is visible beside whoever started it rather than somewhere obscure.
+	return "./figures"
 }
 
 // 🔴 A phone must not be able to choose a path on the host. Everything outside
