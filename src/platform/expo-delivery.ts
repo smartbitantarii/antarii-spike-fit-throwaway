@@ -80,9 +80,18 @@ export function pendingFallbacks(): string[] {
  */
 const ADDRESS_FILE = 'collector-address.txt';
 
-export function readCollectorBase(): string {
+/**
+ * §6d requires the ACTUAL device, not a capability alone, and the first
+ * delivery from a phone wrote a file named
+ * `..._set-at-run-time-by-the-operator_N.json` — the placeholder, in the
+ * evidence. ⚠ A record that cannot say which handset produced it is not a
+ * record, so the operator types it once and it persists.
+ */
+const DEVICE_FILE = 'device-label.txt';
+
+function readSetting(name: string): string {
   try {
-    const f = new File(figuresDir(), ADDRESS_FILE);
+    const f = new File(figuresDir(), name);
     if (!f.exists) return '';
     return f.textSync().trim();
   } catch {
@@ -90,9 +99,34 @@ export function readCollectorBase(): string {
   }
 }
 
-export async function saveCollectorBase(base: string): Promise<void> {
-  const f = new File(figuresDir(), ADDRESS_FILE);
+async function saveSetting(name: string, value: string): Promise<void> {
+  const f = new File(figuresDir(), name);
   if (f.exists) f.delete();
   f.create();
-  await f.write(base.trim());
+  await f.write(value.trim());
+}
+
+export function readCollectorBase(): string {
+  return readSetting(ADDRESS_FILE);
+}
+
+/**
+ * The handset, as §6d wants it recorded — e.g. `Galaxy M04`.
+ *
+ * ⚠ Read SYNCHRONOUSLY at start-up because the harness is constructed with
+ * it: every `Figure` carries the context it was taken under, so a device
+ * label that arrived later would leave the figures already recorded naming
+ * the wrong handset. Changing it therefore takes effect on the next launch,
+ * which the field says.
+ */
+export function readDeviceLabel(): string {
+  return readSetting(DEVICE_FILE);
+}
+
+export async function saveDeviceLabel(label: string): Promise<void> {
+  await saveSetting(DEVICE_FILE, label);
+}
+
+export async function saveCollectorBase(base: string): Promise<void> {
+  await saveSetting(ADDRESS_FILE, base);
 }

@@ -38,6 +38,8 @@ import {
   writeFigureFallback,
   readCollectorBase,
   saveCollectorBase,
+  readDeviceLabel,
+  saveDeviceLabel,
 } from './src/platform/expo-delivery.ts';
 import { ProfilePreference, type Profile } from './src/ui/profile.ts';
 import { repeatingPresentation, type RepeatingPresentation } from './src/ui/presentation.ts';
@@ -52,7 +54,10 @@ const context: RunContext = {
   // would name the wrong build, which is a false pass on the leg that tests
   // the update. build.test.ts holds build.ts and app.json to each other.
   buildId: BUILD_ID,
-  device: 'set at run time by the operator',
+  // ⚠ Replaced at start-up by the operator's stored label. The first
+  // delivery from a phone wrote `..._set-at-run-time-by-the-operator_N.json`
+  // — the placeholder reached the evidence, which §6d does not permit.
+  device: 'UNSET — set the device label',
   fill: 'set at run time by the operator',
   offline: false,
 };
@@ -66,7 +71,19 @@ export default function App(): React.JSX.Element {
   // by presentation.ts's ASSUMED_VIEWPORT_DP, which exists only for the tests.
   const { width } = useWindowDimensions();
   const order = React.useMemo(() => plan(form), [form]);
-  const harness = React.useMemo(() => new Harness(context, () => performance.now()), []);
+  /**
+   * ⚠ The device label is read ONCE, here, because every `Figure` carries
+   * the context it was taken under. Reading it later would leave figures
+   * already recorded naming the wrong handset.
+   */
+  const runContext = React.useMemo<RunContext>(
+    () => ({ ...context, device: readDeviceLabel() || context.device }),
+    [],
+  );
+  const harness = React.useMemo(
+    () => new Harness(runContext, () => performance.now()),
+    [runContext],
+  );
   const store = React.useMemo(
     () => new SqlCipherStore('spike.db', keystoreKeyProvider, openExpoDatabase),
     [],
@@ -124,28 +141,31 @@ export default function App(): React.JSX.Element {
    * moves between networks, and because on a phone `localhost` is the phone.
    */
   const [collector, setCollector] = React.useState<string>('');
+  const [deviceLabel, setDeviceLabel] = React.useState<string>('');
   const [delivery, setDelivery] = React.useState<string>('');
 
   React.useEffect(() => {
     setCollector(readCollectorBase());
+    setDeviceLabel(readDeviceLabel());
   }, []);
 
   const onDeliver = React.useCallback(async () => {
     setDelivery('working\u2026');
     try {
       await saveCollectorBase(collector);
+      await saveDeviceLabel(deviceLabel);
 
       // ⚠ `record()` asserts nothing is still being timed. A mark left open
       // would otherwise be delivered as a silently short figure.
       const taken = harness.record();
-      const payload = devicePayload('incidental-marks', context, taken.figures);
+      const payload = devicePayload('incidental-marks', runContext, taken.figures);
       const json = stableJson(payload);
 
       const outcome = await deliver(
         json,
         collector,
         expoPost,
-        { buildId: context.buildId, device: context.device },
+        { buildId: runContext.buildId, device: runContext.device },
         // On a phone, always. The loopback guard exists for this call.
         { onDevice: true },
       );
@@ -162,7 +182,7 @@ export default function App(): React.JSX.Element {
     } catch (err) {
       setDelivery('failed: ' + (err instanceof Error ? err.message : String(err)));
     }
-  }, [collector, harness]);
+  }, [collector, deviceLabel, harness]);
   const onSwitchProfile = React.useCallback(
     (next: Profile) => {
       pref.switchTo(next);
@@ -285,6 +305,16 @@ export default function App(): React.JSX.Element {
       it easy to hit by accident during a measured sequence.
     */}
     <View style={styles.collectorBar}>
+      <Text style={styles.note}>device label (§6d: the actual handset) — restart to apply</Text>
+      <TextInput
+        style={styles.collectorInput}
+        value={deviceLabel}
+        onChangeText={setDeviceLabel}
+        placeholder="Galaxy M04"
+        autoCapitalize="words"
+        autoCorrect={false}
+        accessibilityLabel="Device label"
+      />
       <Text style={styles.note}>collector (the dev machine's LAN address)</Text>
       <TextInput
         style={styles.collectorInput}

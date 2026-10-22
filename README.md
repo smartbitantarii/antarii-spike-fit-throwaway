@@ -199,3 +199,41 @@ apart from the first"*.
 ⚠ **And the provenance scan cannot run in CI, by design.** Rule 7's list lives at
 `.git/provenance-forbidden.txt` and *"must not live in the repository"*, so no hosted runner can
 ever have it. The commit-time guard is **local-only**; the secret-scanning half is server-side.
+
+## 🔴 Cleartext HTTP is permitted — in this throwaway only
+
+The first delivery from a phone failed before a packet left the device:
+
+```
+java.net.UnknownServiceException: CLEARTEXT communication to 192.168.29.77
+not permitted by network security policy
+```
+
+**Android has blocked plain HTTP by default since Android 9**, and iOS's App Transport
+Security does the same. That is not a firewall problem and no firewall rule would have
+fixed it — the platform refuses the request locally.
+
+⚠ **It would have blocked more than delivery.** The device uploads media to the local
+object store over HTTP, so **axis 5's legs (ii) and (iii) would have hit the same wall
+on-device**, at a point where it would have read as a media-path failure rather than a
+platform policy.
+
+**What is now set**, both verified against the libraries' own types rather than assumed:
+
+| Platform | Setting | Where |
+|---|---|---|
+| Android | `usesCleartextTraffic: true` | `expo-build-properties` — the first-party plugin; the key is **not** in Expo's own config schema |
+| iOS | `NSAppTransportSecurity.NSAllowsArbitraryLoads` + `NSLocalNetworkUsageDescription` | `ios.infoPlist` |
+
+🔴 **Why blanket, and why that is acceptable here and nowhere else.** The precise
+alternatives — Android's per-domain network security config, iOS's
+`NSAllowsLocalNetworking` — are scoped to named hosts or link-local addresses, and it is
+**not settled** that either covers a numeric private address like `192.168.29.77`.
+Finding out costs a build-and-install cycle per guess. ➕ So this spike, which is
+**disposable, has no tenant data, and talks to one LAN stack**, takes the blunt option
+deliberately.
+
+✕ **It must not follow the code out of here.** A component repository carrying
+`NSAllowsArbitraryLoads` or app-wide cleartext would be shipping a real weakness for a
+convenience it does not need. The scoped forms are the right answer there, and settling
+which one actually covers a private IP is work that belongs with that decision.

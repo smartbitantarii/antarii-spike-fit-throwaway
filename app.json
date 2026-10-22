@@ -12,7 +12,11 @@
     "ios": {
       "bundleIdentifier": "com.smartbitit.antarii.spike",
       "infoPlist": {
-        "NSCameraUsageDescription": "The spike captures a photograph to measure condition 1's attach-and-display figure."
+        "NSCameraUsageDescription": "The spike captures a photograph to measure condition 1's attach-and-display figure.",
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        },
+        "NSLocalNetworkUsageDescription": "The spike delivers its measurements to the development machine on the local network, and uploads media to the local object store that axis 5 measures."
       }
     },
     "plugins": [
@@ -20,6 +24,14 @@
         "expo-sqlite",
         {
           "useSQLCipher": true
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
         }
       ]
     ]
