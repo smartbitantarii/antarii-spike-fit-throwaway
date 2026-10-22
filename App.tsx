@@ -40,6 +40,8 @@ import {
   saveCollectorBase,
   readDeviceLabel,
   saveDeviceLabel,
+  readFillState,
+  saveFillState,
 } from './src/platform/expo-delivery.ts';
 import { ProfilePreference, type Profile } from './src/ui/profile.ts';
 import { repeatingPresentation, type RepeatingPresentation } from './src/ui/presentation.ts';
@@ -77,7 +79,11 @@ export default function App(): React.JSX.Element {
    * already recorded naming the wrong handset.
    */
   const runContext = React.useMemo<RunContext>(
-    () => ({ ...context, device: readDeviceLabel() || context.device }),
+    () => ({
+      ...context,
+      device: readDeviceLabel() || context.device,
+      fill: readFillState() || context.fill,
+    }),
     [],
   );
   const harness = React.useMemo(
@@ -142,11 +148,13 @@ export default function App(): React.JSX.Element {
    */
   const [collector, setCollector] = React.useState<string>('');
   const [deviceLabel, setDeviceLabel] = React.useState<string>('');
+  const [fill, setFill] = React.useState<string>('');
   const [delivery, setDelivery] = React.useState<string>('');
 
   React.useEffect(() => {
     setCollector(readCollectorBase());
     setDeviceLabel(readDeviceLabel());
+    setFill(readFillState());
   }, []);
 
   const onDeliver = React.useCallback(async () => {
@@ -154,6 +162,29 @@ export default function App(): React.JSX.Element {
     try {
       await saveCollectorBase(collector);
       await saveDeviceLabel(deviceLabel);
+      await saveFillState(fill);
+
+      /**
+       * 🔴 REFUSED RATHER THAN DOCUMENTED. The first real delivery
+       * arrived naming its handset `UNSET — set the device label`, because
+       * the label is read at start-up and typing it is not enough. §6d
+       * requires the ACTUAL device, so **a record that cannot say which
+       * handset produced it is not a record** — and a trap that only a
+       * README warns about is a trap that gets sprung.
+       *
+       * ⚠ The check is against the HARNESS's context, not the text field:
+       * the field may already hold the right name while every figure
+       * recorded so far carries the placeholder, and it is the figures
+       * that travel.
+       */
+      if (runContext.device === context.device) {
+        setDelivery(
+          'refused: the device label is not in force yet. Type it above, then RESTART ' +
+            'the app — figures carry the context they were taken under, so a label set ' +
+            'after they were recorded would name the wrong handset.',
+        );
+        return;
+      }
 
       // ⚠ `record()` asserts nothing is still being timed. A mark left open
       // would otherwise be delivered as a silently short figure.
@@ -182,7 +213,7 @@ export default function App(): React.JSX.Element {
     } catch (err) {
       setDelivery('failed: ' + (err instanceof Error ? err.message : String(err)));
     }
-  }, [collector, deviceLabel, harness]);
+  }, [collector, deviceLabel, fill, harness, runContext]);
   const onSwitchProfile = React.useCallback(
     (next: Profile) => {
       pref.switchTo(next);
@@ -346,6 +377,16 @@ export default function App(): React.JSX.Element {
         autoCapitalize="words"
         autoCorrect={false}
         accessibilityLabel="Device label"
+      />
+      <Text style={styles.note}>fill (§6d: the state held throughout) — restart to apply</Text>
+      <TextInput
+        style={styles.collectorInput}
+        value={fill}
+        onChangeText={setFill}
+        placeholder="80% of SwR-115's 2 GB budget"
+        autoCapitalize="none"
+        autoCorrect={false}
+        accessibilityLabel="Fill state"
       />
       <Text style={styles.note}>collector (the dev machine's LAN address)</Text>
       <TextInput

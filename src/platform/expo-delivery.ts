@@ -89,6 +89,13 @@ const ADDRESS_FILE = 'collector-address.txt';
  */
 const DEVICE_FILE = 'device-label.txt';
 
+/**
+ * §6d records the fill the device was at THROUGHOUT the sample. Like the
+ * device label it is an operator fact the phone cannot know, and it was
+ * reaching the evidence as a placeholder.
+ */
+const FILL_FILE = 'fill-state.txt';
+
 function readSetting(name: string): string {
   try {
     const f = new File(figuresDir(), name);
@@ -125,6 +132,14 @@ export function readDeviceLabel(): string {
 
 export async function saveDeviceLabel(label: string): Promise<void> {
   await saveSetting(DEVICE_FILE, label);
+}
+
+export function readFillState(): string {
+  return readSetting(FILL_FILE);
+}
+
+export async function saveFillState(fill: string): Promise<void> {
+  await saveSetting(FILL_FILE, fill);
 }
 
 export async function saveCollectorBase(base: string): Promise<void> {
