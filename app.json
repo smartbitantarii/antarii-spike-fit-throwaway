@@ -7,7 +7,8 @@
     "orientation": "default",
     "newArchEnabled": true,
     "android": {
-      "package": "com.smartbitit.antarii.spike"
+      "package": "com.smartbitit.antarii.spike",
+      "allowBackup": false
     },
     "ios": {
       "bundleIdentifier": "com.smartbitit.antarii.spike",

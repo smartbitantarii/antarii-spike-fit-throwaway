@@ -207,17 +207,37 @@ export default function App(): React.JSX.Element {
     width,
   );
 
-  // S1's stop is "the form is interactive", so the store must be open first.
+  /**
+   * S1's stop is "the form is interactive", so the store must be open first.
+   *
+   * 🔴 THE CATCH IS NOT DEFENSIVE PADDING. Without it a rejected
+   * `open()` was swallowed as an unhandled rejection, `ready` stayed false,
+   * and the app sat on “opening the encrypted store…” forever — so **a
+   * store that FAILED to open was indistinguishable from one that was
+   * slow**. That is the worst possible presentation of leg (iv)'s subject:
+   * the quiet failure the whole axis exists to catch, hidden behind a
+   * splash screen. It cost an install cycle before it was noticed.
+   */
+  const [openFailure, setOpenFailure] = React.useState<string>('');
   React.useEffect(() => {
     let live = true;
     (async () => {
-      harness.start('S1');
-      await store.open();
-      const loaded = await store.getAnswers(RECORD);
-      if (!live) return;
-      setAnswers(loaded);
-      setReady(true);
-      harness.stop('S1');
+      try {
+        harness.start('S1');
+        await store.open();
+        const loaded = await store.getAnswers(RECORD);
+        if (!live) return;
+        setAnswers(loaded);
+        setReady(true);
+        harness.stop('S1');
+      } catch (err) {
+        if (!live) return;
+        // ⚠ Reported verbatim. SqlCipherStore's messages name which step
+        // refused — the key PRAGMA, the integrity check, the schema — and
+        // paraphrasing them would throw away the attribution leg (iv)
+        // depends on.
+        setOpenFailure(err instanceof Error ? err.message : String(err));
+      }
     })();
     return () => {
       live = false;
@@ -251,6 +271,18 @@ export default function App(): React.JSX.Element {
     [form, harness, order, store],
   );
 
+  if (openFailure) {
+    return (
+      <ScrollView contentContainerStyle={styles.content}>
+        <Text style={styles.status}>The encrypted store did not open.</Text>
+        <Text selectable style={styles.note}>{openFailure}</Text>
+        <Text style={styles.note}>
+          {'\n'}If this mentions the integrity check, the database on this device was not
+          written by the key now in the keystore — reinstall after clearing the app’s data.
+        </Text>
+      </ScrollView>
+    );
+  }
   if (!ready) return <Text style={styles.status}>opening the encrypted store…</Text>;
 
   return (
