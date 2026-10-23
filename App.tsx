@@ -215,11 +215,22 @@ export default function App(): React.JSX.Element {
           await store.putAnswer(RECORD, field, value);
           fresh.stop('S3', token); // committed, not queued — brief §6c
 
-          await new Promise<void>((resolve) => {
+          await new Promise<void>((resolve, reject) => {
+            // ⚠ A DEADLINE HERE TOO. `requestAnimationFrame` does not fire
+            // while the app is backgrounded, so a campaign left running
+            // behind another app would stall here indefinitely — the same
+            // shape as the navigation hang, for a different reason.
+            const timer = setTimeout(
+              () => reject(new Error('no frame within 10s — was the app backgrounded mid-campaign?')),
+              10_000,
+            );
             setAnswers((prev) => ({ ...prev, [field]: value }));
             // One frame, so the re-evaluation has reached the screen and
             // input is unblocked — which is what S6's stop event names.
-            requestAnimationFrame(() => resolve());
+            requestAnimationFrame(() => {
+              clearTimeout(timer);
+              resolve();
+            });
           });
           fresh.stop('S6', token);
         },
@@ -265,31 +276,46 @@ export default function App(): React.JSX.Element {
           seq,
           async ({ iteration }) => {
             if (seq === 'S1') {
-              // Start FROM the list, which is where M7 says the clock starts.
-              setScreen('list');
-              await new Promise<void>((r) => { listReady.current = r; });
+              /**
+               * ⚠ Only navigate if we are not already there. M7's reset
+               * returns to the list at the END of each iteration, so from
+               * iteration 2 onwards we arrive here already on it — and
+               * navigating to the screen you are on produces no layout and
+               * no signal.
+               */
+              if (screenRef.current !== 'list') {
+                await awaitSignal(listReady, 'worklist', () => setScreen('list'));
+              }
 
               const target = jobForIteration(worklist, iteration);
-              await new Promise<void>((resolve) => {
-                formReady.current = resolve;
+              await awaitSignal(formReady, 'form', () => {
                 fresh.start('S1');
                 setJob(target);
                 setScreen('form');
               });
               fresh.stop('S1');
-              setScreen('list'); // leave without saving (reset)
-            } else {
-              // S4 starts from a NON-list screen.
-              setJob(jobForIteration(worklist, iteration));
-              setScreen('form');
-              await new Promise<void>((r) => { formReady.current = r; });
 
-              await new Promise<void>((resolve) => {
-                listReady.current = resolve;
+              // M7 step 4: leave without saving, return to the list. Awaited,
+              // so the next iteration genuinely starts from a settled list
+              // rather than racing the navigation it depends on.
+              await awaitSignal(listReady, 'worklist (reset)', () => setScreen('list'));
+            } else {
+              // S4 starts from a NON-list screen, so get onto the form first.
+              if (screenRef.current !== 'form') {
+                setJob(jobForIteration(worklist, iteration));
+                await awaitSignal(formReady, 'form', () => setScreen('form'));
+              }
+
+              await awaitSignal(listReady, 'worklist', () => {
                 fresh.start('S4');
                 setScreen('list');
               });
               fresh.stop('S4');
+
+              // Navigate away again (reset), so each iteration measures the
+              // same journey rather than alternating between two.
+              setJob(jobForIteration(worklist, iteration));
+              await awaitSignal(formReady, 'form (reset)', () => setScreen('form'));
             }
           },
           {
@@ -308,7 +334,7 @@ export default function App(): React.JSX.Element {
         setBusy(false);
       }
     },
-    [runContext, worklist],
+    [awaitSignal, runContext, worklist],
   );
 
   const onDeliver = React.useCallback(async () => {
@@ -452,6 +478,54 @@ export default function App(): React.JSX.Element {
    */
   const listReady = React.useRef<null | (() => void)>(null);
   const formReady = React.useRef<null | (() => void)>(null);
+
+  /**
+   * ⚠ A REF, BECAUSE THE CAMPAIGN NEEDS TO KNOW WHERE IT IS *NOW*.
+   * The loop runs inside one closure across 101 iterations, so reading
+   * `screen` from state would read the value captured when the campaign
+   * started. The first version did not check at all, which is how it came to
+   * navigate to the screen it was already on.
+   */
+  const screenRef = React.useRef<'list' | 'form'>('list');
+  screenRef.current = screen;
+
+  /**
+   * 🔴 NEVER AWAIT A LAYOUT SIGNAL WITHOUT A DEADLINE.
+   *
+   * The first version awaited one with no timeout, and when the signal could
+   * not arrive — because the navigation was a no-op — the campaign hung
+   * silently on iteration 1. **A lost signal is indistinguishable from a slow
+   * device**, which is the same defect this project already hit with `fetch`
+   * having no default timeout; the lesson simply was not carried across.
+   *
+   * ➕ Ten seconds is far beyond any plausible navigation on the weakest
+   * device in hand and far below the patience of someone watching a bar that
+   * is not moving.
+   */
+  const NAV_TIMEOUT_MS = 10_000;
+
+  const awaitSignal = React.useCallback(
+    (slot: React.MutableRefObject<null | (() => void)>, what: string, trigger: () => void) =>
+      new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          slot.current = null;
+          reject(
+            new Error(
+              'no ' + what + ' signal within ' + NAV_TIMEOUT_MS + 'ms. The navigation probably ' +
+                'did not happen — a screen does not re-layout when it is already showing.',
+            ),
+          );
+        }, NAV_TIMEOUT_MS);
+        // Armed BEFORE the trigger: layout can complete before a callback
+        // registered afterwards would exist.
+        slot.current = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        trigger();
+      }),
+    [],
+  );
 
   const signalListReady = React.useCallback(() => {
     const r = listReady.current;
