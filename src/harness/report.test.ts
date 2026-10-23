@@ -249,3 +249,24 @@ test('§6a: a campaign payload carries its STEPS; incidental marks carry none', 
   const marks = devicePayload('incidental-marks', ctx, [figure()]);
   assert.deepEqual(marks.steps, {});
 });
+
+test('🔴 the cold start travels as an observation with NO target and NO verdict', () => {
+  // It was briefly instrumented as S1, which it is not: M7 starts S1 at the
+  // form-open tap from the job list with the store already open. Reported
+  // under S1's name it would have been judged against a 300ms target that
+  // binds a navigation. SwR-100 binds five interactions and launch is not
+  // among them, so a number without a verdict is the only honest shape.
+  const ctx = { buildId: 'N', device: 'Galaxy A35 5G', fill: 'none', offline: true };
+  const p = devicePayload('incidental-marks', ctx, [], '2026-10-23T00:00:00.000Z', {}, 306.9);
+
+  assert.equal(p.coldStartMs, 306.9);
+  // It must NOT appear among the figures, which carry targets and verdicts.
+  assert.deepEqual(p.figures, []);
+  assert.ok(!('targetMs' in (p as unknown as Record<string, unknown>)));
+});
+
+test('a payload with no cold start says null rather than omitting it', () => {
+  const ctx = { buildId: 'N', device: 'x', fill: 'none', offline: true };
+  const p = devicePayload('campaign', ctx, [figure()]);
+  assert.equal(p.coldStartMs, null, 'absent must be explicit, not missing');
+});

@@ -338,6 +338,24 @@ export interface DevicePayload {
   offline: boolean;
   fill: string;
   figures: Figure[];
+  /**
+   * 🔴 THE COLD START — AND IT IS DELIBERATELY NOT A FIGURE.
+   *
+   * Opening the application was briefly instrumented as `S1`, which it is
+   * not: **M7 §3 starts `S1` at the form-open tap FROM THE JOB LIST, with
+   * the store already open** — a navigation, not a launch. A cold start
+   * recorded under `S1`'s name would be compared against `S1`'s 300 ms
+   * target, which binds a different thing entirely.
+   *
+   * ⚠ So it travels as its own observation with **no target and no
+   * pass/fail**, because **`SwR-100` binds five interactions and launch is
+   * not among them** — opening a form, moving between fields and saving an
+   * answer under 300 ms, the job or form list under 1 second, and a
+   * captured photograph. *Whether launch should be bound at all is an
+   * open question for the owner; until it is answered, reporting a number
+   * without a verdict is the only honest shape.*
+   */
+  coldStartMs: number | null;
 }
 
 const KIND_NOTE: Readonly<Record<DevicePayloadKind, string>> = Object.freeze({
@@ -354,6 +372,7 @@ export function devicePayload(
   figures: Figure[],
   atIso: string = new Date().toISOString(),
   steps: Record<string, string[]> = {},
+  coldStartMs: number | null = null,
 ): DevicePayload {
   return {
     kind,
@@ -365,5 +384,6 @@ export function devicePayload(
     offline: context.offline,
     fill: context.fill,
     figures,
+    coldStartMs,
   };
 }

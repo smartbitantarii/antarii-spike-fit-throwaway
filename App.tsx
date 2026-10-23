@@ -138,7 +138,7 @@ export default function App(): React.JSX.Element {
    * Getting what the harness holds off the device.
    *
    * 🔴 WHAT THIS SENDS IS *NOT* A MEASUREMENT, AND IT SAYS SO.
-   * The app marks S1, S3 and S6 while the form is used by hand. Those are
+   * The app marks S3 and S6 while the form is used by hand. Those are
    * real timings and they are not figures: no warm-up discarded, no
    * controlled fill, no §6a sample. The payload carries
    * `kind: 'incidental-marks'` so nothing downstream can mistake them for a
@@ -150,7 +150,7 @@ export default function App(): React.JSX.Element {
    */
   /**
    * 🔴 A CAMPAIGN GETS ITS OWN HARNESS. The app's harness already holds
-   * S1/S3/S6 marks from ordinary use, and `runCampaign` refuses a harness
+   * S3/S6 marks from ordinary use, and `runCampaign` refuses a harness
    * that has recorded the sequence — rightly, since a p95 over a mixture of
    * conditions looks exactly like a p95 over a campaign. A dedicated
    * harness makes the separation structural instead of a thing to remember.
@@ -265,9 +265,9 @@ export default function App(): React.JSX.Element {
        */
       if (runContext.device === context.device) {
         setDelivery(
-          'refused: the device label is not in force yet. Type it above, then RESTART ' +
-            'the app — figures carry the context they were taken under, so a label set ' +
-            'after they were recorded would name the wrong handset.',
+          'refused: the label is SAVED but not in force — now RESTART the app. ' +
+            'Figures carry the context they were taken under, so a label applied after ' +
+            'they were recorded would name the wrong handset.',
         );
         return;
       }
@@ -288,6 +288,7 @@ export default function App(): React.JSX.Element {
         figures,
         new Date().toISOString(),
         isCampaign ? stepsForRecord(['S3', 'S6']) : {},
+        coldStartMs,
       );
       const json = stableJson(payload);
 
@@ -312,7 +313,7 @@ export default function App(): React.JSX.Element {
     } catch (err) {
       setDelivery('failed: ' + (err instanceof Error ? err.message : String(err)));
     }
-  }, [campaignFigures, collector, deviceLabel, fill, harness, runContext]);
+  }, [campaignFigures, coldStartMs, collector, deviceLabel, fill, harness, runContext]);
   const onSwitchProfile = React.useCallback(
     (next: Profile) => {
       pref.switchTo(next);
@@ -338,7 +339,7 @@ export default function App(): React.JSX.Element {
   );
 
   /**
-   * S1's stop is "the form is interactive", so the store must be open first.
+   * Opening the store, which must happen before anything is interactive.
    *
    * 🔴 THE CATCH IS NOT DEFENSIVE PADDING. Without it a rejected
    * `open()` was swallowed as an unhandled rejection, `ready` stayed false,
@@ -349,17 +350,29 @@ export default function App(): React.JSX.Element {
    * splash screen. It cost an install cycle before it was noticed.
    */
   const [openFailure, setOpenFailure] = React.useState<string>('');
+  /**
+   * 🔴 MEASURED, BUT NOT AS `S1`. The launch was instrumented as `S1`
+   * and it is not one: M7 starts `S1` at the form-open tap **from the job
+   * list with the store already open**. Timing a cold start under that
+   * name put a launch figure against a navigation's 300 ms target, and it
+   * also meant ordinary use filled `S1`'s slot with the wrong thing — so a
+   * real `S1` campaign would later have been refused for the wrong reason.
+   *
+   * ➕ The number is kept because it is the most expensive thing observed
+   * so far, and it is reported with **no target and no verdict**.
+   */
+  const [coldStartMs, setColdStartMs] = React.useState<number | null>(null);
   React.useEffect(() => {
     let live = true;
     (async () => {
       try {
-        harness.start('S1');
+        const t0 = performance.now();
         await store.open();
         const loaded = await store.getAnswers(RECORD);
         if (!live) return;
         setAnswers(loaded);
         setReady(true);
-        harness.stop('S1');
+        setColdStartMs(performance.now() - t0);
       } catch (err) {
         if (!live) return;
         // ⚠ Reported verbatim. SqlCipherStore's messages name which step
@@ -472,6 +485,7 @@ export default function App(): React.JSX.Element {
         style={styles.collectorInput}
         value={deviceLabel}
         onChangeText={setDeviceLabel}
+        onBlur={() => { void saveDeviceLabel(deviceLabel); }}
         placeholder="Galaxy M04"
         autoCapitalize="words"
         autoCorrect={false}
@@ -482,6 +496,7 @@ export default function App(): React.JSX.Element {
         style={styles.collectorInput}
         value={fill}
         onChangeText={setFill}
+        onBlur={() => { void saveFillState(fill); }}
         placeholder="80% of SwR-115's 2 GB budget"
         autoCapitalize="none"
         autoCorrect={false}
@@ -492,6 +507,7 @@ export default function App(): React.JSX.Element {
         style={styles.collectorInput}
         value={collector}
         onChangeText={setCollector}
+        onBlur={() => { void saveCollectorBase(collector); }}
         placeholder="http://192.168.1.50:8080"
         autoCapitalize="none"
         autoCorrect={false}
