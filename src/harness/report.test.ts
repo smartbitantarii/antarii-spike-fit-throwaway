@@ -236,3 +236,16 @@ test('the payload carries the run context a figure is meaningless without', () =
   assert.equal(p.offline, false);
   assert.equal(p.date, '2026-10-19T12:00:00.000Z');
 });
+
+test('§6a: a campaign payload carries its STEPS; incidental marks carry none', () => {
+  const ctx = { buildId: 'N', device: 'Galaxy A35 5G', fill: 'none', offline: true };
+  const steps = { S3: ['open at a field a rule depends on', 'mark start'] };
+
+  const camp = devicePayload('campaign', ctx, [figure()], '2026-10-23T00:00:00.000Z', steps);
+  assert.deepEqual(camp.steps, steps, 'the record must list what was performed');
+
+  // ⚠ Empty for incidental marks, and that emptiness is informative: they
+  // follow no script, so there are no steps to list.
+  const marks = devicePayload('incidental-marks', ctx, [figure()]);
+  assert.deepEqual(marks.steps, {});
+});

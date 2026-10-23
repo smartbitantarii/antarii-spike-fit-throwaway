@@ -324,6 +324,12 @@ export type DevicePayloadKind = 'campaign' | 'incidental-marks';
 
 export interface DevicePayload {
   kind: DevicePayloadKind;
+  /**
+   * §6a: “a scripted interaction sequence whose steps are listed WITH the
+   * record”. Empty for incidental marks, which follow no script — and that
+   * emptiness is itself informative.
+   */
+  steps: Record<string, string[]>;
   /** why this kind, in words, so the record is self-explaining */
   kindNote: string;
   date: string;
@@ -347,10 +353,12 @@ export function devicePayload(
   context: RunContext,
   figures: Figure[],
   atIso: string = new Date().toISOString(),
+  steps: Record<string, string[]> = {},
 ): DevicePayload {
   return {
     kind,
     kindNote: KIND_NOTE[kind],
+    steps,
     date: atIso,
     buildId: context.buildId,
     device: { model: context.device },

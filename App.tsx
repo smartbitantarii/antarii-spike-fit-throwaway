@@ -21,7 +21,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 
-import { Harness, type RunContext } from './src/harness/harness.ts';
+import { Harness, type Figure, type RunContext } from './src/harness/harness.ts';
 import { evaluate, plan } from './src/form/evaluate.ts';
 import type { Answers, FormDef } from './src/form/model.ts';
 import { SqlCipherStore } from './src/store/store.ts';
@@ -32,6 +32,8 @@ import { BUILD_ID } from './src/build.ts';
 import { planCapture, SHIPPED_LAYERS, LOCATION_UNAVAILABLE } from './src/media/prepare.ts';
 import { captureAndPrepare, type CaptureResult } from './src/platform/expo-media.ts';
 import { devicePayload, stableJson } from './src/harness/report.ts';
+import { runCampaign, ITERATIONS } from './src/harness/campaign.ts';
+import { SEQUENCES, stepsForRecord } from './src/harness/sequences.ts';
 import { deliver } from './src/harness/delivery.ts';
 import {
   expoPost,
@@ -146,6 +148,17 @@ export default function App(): React.JSX.Element {
    * ⚠ The address is typed in because the development machine's LAN address
    * moves between networks, and because on a phone `localhost` is the phone.
    */
+  /**
+   * 🔴 A CAMPAIGN GETS ITS OWN HARNESS. The app's harness already holds
+   * S1/S3/S6 marks from ordinary use, and `runCampaign` refuses a harness
+   * that has recorded the sequence — rightly, since a p95 over a mixture of
+   * conditions looks exactly like a p95 over a campaign. A dedicated
+   * harness makes the separation structural instead of a thing to remember.
+   */
+  const [campaign, setCampaign] = React.useState<string>('');
+  const [campaignFigures, setCampaignFigures] = React.useState<Figure[] | null>(null);
+  const [busy, setBusy] = React.useState(false);
+
   const [collector, setCollector] = React.useState<string>('');
   const [deviceLabel, setDeviceLabel] = React.useState<string>('');
   const [fill, setFill] = React.useState<string>('');
@@ -156,6 +169,79 @@ export default function App(): React.JSX.Element {
     setDeviceLabel(readDeviceLabel());
     setFill(readFillState());
   }, []);
+
+  /**
+   * S3 + S6, driven to a full §6a sample. M7 §3 lists them as ONE section
+   * with a single `mark start` and two stops, so they are driven together —
+   * driving them apart would time two different value-sets and make the
+   * pair incomparable.
+   *
+   * ⚠ TWO METHOD CHOICES THAT DECIDE WHAT THE FIGURE MEANS, both the
+   * author's and both recorded here rather than buried:
+   *
+   * ➕ **The field is one a rule depends on.** M7 makes this a REQUIREMENT
+   * of the step — “required, or S6 measures nothing” — so the value is set
+   * on `defect`, which `explanation` and `photo` both react to.
+   *
+   * ➕ **S6 stops after the RENDER, not after `evaluate()` returns.** M7
+   * stops it when “the next interaction is accepted — input unblocked”,
+   * which is a property of the screen rather than of the engine. Timing
+   * `evaluate()` alone would measure the rule engine and report it as the
+   * application's figure. The cost is that React's frame scheduling is
+   * inside the measurement; that makes the figure WORSE than the engine
+   * alone, never better, so it cannot flatter a pass.
+   */
+  const onRunCampaign = React.useCallback(async () => {
+    setBusy(true);
+    setCampaign('starting\u2026');
+    try {
+      const fresh = new Harness(runContext, () => performance.now());
+      const field = 'defect';
+      let flip = false;
+
+      const result = await runCampaign(
+        fresh,
+        'S3',
+        async ({ iteration }) => {
+          const token = 'c' + iteration;
+          const value = flip ? 'true' : 'false';
+          flip = !flip;
+
+          fresh.start('S3', token);
+          fresh.start('S6', token);
+
+          await store.putAnswer(RECORD, field, value);
+          fresh.stop('S3', token); // committed, not queued — brief §6c
+
+          await new Promise<void>((resolve) => {
+            setAnswers((prev) => ({ ...prev, [field]: value }));
+            // One frame, so the re-evaluation has reached the screen and
+            // input is unblocked — which is what S6's stop event names.
+            requestAnimationFrame(() => resolve());
+          });
+          fresh.stop('S6', token);
+        },
+        {
+          onProgress: (p) =>
+            setCampaign('iteration ' + p.iteration + '/' + p.total + (p.warmup ? ' (warm-up)' : '')),
+        },
+      );
+
+      // S6 was driven by the same iteration, so its figure is ready too.
+      const s6 = fresh.figure('S6');
+      setCampaignFigures([result.figure, s6]);
+      setCampaign(
+        'S3 n=' + result.figure.n + ' p95=' + result.figure.p95Ms + 'ms ' +
+          (result.figure.pass ? 'PASS' : 'FAIL') +
+          '  |  S6 n=' + s6.n + ' p95=' + s6.p95Ms + 'ms ' + (s6.pass ? 'PASS' : 'FAIL') +
+          '  — now Deliver',
+      );
+    } catch (err) {
+      setCampaign('campaign failed: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setBusy(false);
+    }
+  }, [runContext, store]);
 
   const onDeliver = React.useCallback(async () => {
     setDelivery('working\u2026');
@@ -188,8 +274,21 @@ export default function App(): React.JSX.Element {
 
       // ⚠ `record()` asserts nothing is still being timed. A mark left open
       // would otherwise be delivered as a silently short figure.
-      const taken = harness.record();
-      const payload = devicePayload('incidental-marks', runContext, taken.figures);
+      /**
+       * ⚠ A campaign's figures travel as `kind: 'campaign'` WITH their
+       * steps; anything else is `incidental-marks` with none. The kind is
+       * decided by what was actually run, never by a toggle — a payload
+       * that could be mislabelled by hand would defeat the distinction.
+       */
+      const isCampaign = campaignFigures !== null;
+      const figures = isCampaign ? campaignFigures! : harness.record().figures;
+      const payload = devicePayload(
+        isCampaign ? 'campaign' : 'incidental-marks',
+        runContext,
+        figures,
+        new Date().toISOString(),
+        isCampaign ? stepsForRecord(['S3', 'S6']) : {},
+      );
       const json = stableJson(payload);
 
       const outcome = await deliver(
@@ -213,7 +312,7 @@ export default function App(): React.JSX.Element {
     } catch (err) {
       setDelivery('failed: ' + (err instanceof Error ? err.message : String(err)));
     }
-  }, [collector, deviceLabel, fill, harness, runContext]);
+  }, [campaignFigures, collector, deviceLabel, fill, harness, runContext]);
   const onSwitchProfile = React.useCallback(
     (next: Profile) => {
       pref.switchTo(next);
@@ -399,8 +498,26 @@ export default function App(): React.JSX.Element {
         keyboardType="url"
         accessibilityLabel="Collector address"
       />
+      <Pressable
+        onPress={onRunCampaign}
+        disabled={busy}
+        style={styles.capture}
+        accessibilityRole="button"
+      >
+        <Text>{busy ? 'running\u2026' : 'Run campaign: S3 + S6 (' + ITERATIONS + ' passes)'}</Text>
+      </Pressable>
+      {campaign ? <Text style={styles.note}>{campaign}</Text> : null}
+      {/* ➕ Named here so the operator sees WHY the other six are absent. */}
+      <Text style={styles.note}>
+        {'not drivable yet: ' +
+          (['S1', 'S2', 'S4', 'S5', 'S7', 'S8'] as const)
+            .map((s) => s + ' (' + (SEQUENCES[s].blockedBy ?? '').split(',')[0] + ')')
+            .join('; ')}
+      </Text>
       <Pressable onPress={onDeliver} style={styles.capture} accessibilityRole="button">
-        <Text>Deliver marks (not a measurement)</Text>
+        <Text>
+          {campaignFigures ? 'Deliver CAMPAIGN figures' : 'Deliver marks (not a measurement)'}
+        </Text>
       </Pressable>
       {delivery ? <Text style={styles.note}>{delivery}</Text> : null}
     </View>
