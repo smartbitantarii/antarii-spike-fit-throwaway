@@ -28,6 +28,8 @@ import { SqlCipherStore } from './src/store/store.ts';
 import { Queue } from './src/queue/queue.ts';
 import { keystoreKeyProvider, openExpoDatabase } from './src/platform/expo-adapters.ts';
 import { spikeForm } from './src/form/spike-form.ts';
+import { makeWorklist, jobForIteration, DEFAULT_WORKLIST_VOLUME, type Job } from './src/form/worklist.ts';
+import { WorklistScreen } from './src/ui/worklist-screen.tsx';
 import { BUILD_ID } from './src/build.ts';
 import { planCapture, SHIPPED_LAYERS, LOCATION_UNAVAILABLE } from './src/media/prepare.ts';
 import { captureAndPrepare, type CaptureResult } from './src/platform/expo-media.ts';
@@ -243,6 +245,72 @@ export default function App(): React.JSX.Element {
     }
   }, [runContext, store]);
 
+  /**
+   * `S1` — opening a form, as M7 §3 actually defines it: **from the job
+   * list, with the store already open**, stopping when the first field is
+   * focusable, then leaving without saving. *(reset)*
+   *
+   * ➕ Each iteration opens a DIFFERENT job, stepping through the list.
+   * Re-opening row 0 a hundred times would measure a row already mounted
+   * and laid out, which flatters the navigation.
+   */
+  const runNavigationCampaign = React.useCallback(
+    async (seq: 'S1' | 'S4') => {
+      setBusy(true);
+      setCampaign('starting ' + seq + '\u2026');
+      try {
+        const fresh = new Harness(runContext, () => performance.now());
+        const result = await runCampaign(
+          fresh,
+          seq,
+          async ({ iteration }) => {
+            if (seq === 'S1') {
+              // Start FROM the list, which is where M7 says the clock starts.
+              setScreen('list');
+              await new Promise<void>((r) => { listReady.current = r; });
+
+              const target = jobForIteration(worklist, iteration);
+              await new Promise<void>((resolve) => {
+                formReady.current = resolve;
+                fresh.start('S1');
+                setJob(target);
+                setScreen('form');
+              });
+              fresh.stop('S1');
+              setScreen('list'); // leave without saving (reset)
+            } else {
+              // S4 starts from a NON-list screen.
+              setJob(jobForIteration(worklist, iteration));
+              setScreen('form');
+              await new Promise<void>((r) => { formReady.current = r; });
+
+              await new Promise<void>((resolve) => {
+                listReady.current = resolve;
+                fresh.start('S4');
+                setScreen('list');
+              });
+              fresh.stop('S4');
+            }
+          },
+          {
+            onProgress: (p) =>
+              setCampaign(seq + ' ' + p.iteration + '/' + p.total + (p.warmup ? ' (warm-up)' : '')),
+          },
+        );
+        setCampaignFigures([result.figure]);
+        setCampaign(
+          seq + ' n=' + result.figure.n + ' p95=' + result.figure.p95Ms + 'ms target=' +
+            result.figure.targetMs + ' ' + (result.figure.pass ? 'PASS' : 'FAIL') + ' \u2014 now Deliver',
+        );
+      } catch (err) {
+        setCampaign(seq + ' failed: ' + (err instanceof Error ? err.message : String(err)));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [runContext, worklist],
+  );
+
   const onDeliver = React.useCallback(async () => {
     setDelivery('working\u2026');
     try {
@@ -287,7 +355,7 @@ export default function App(): React.JSX.Element {
         runContext,
         figures,
         new Date().toISOString(),
-        isCampaign ? stepsForRecord(['S3', 'S6']) : {},
+        isCampaign ? stepsForRecord(campaignFigures!.map((f) => f.seq)) : {},
         coldStartMs,
       );
       const json = stableJson(payload);
@@ -362,6 +430,39 @@ export default function App(): React.JSX.Element {
    * so far, and it is reported with **no target and no verdict**.
    */
   const [coldStartMs, setColdStartMs] = React.useState<number | null>(null);
+
+  /**
+   * 🔴 THE LIST IS WHAT MAKES `S1` AND `S4` MEASURABLE AT ALL. Both are
+   * NAVIGATIONS — M7 starts `S1` *“from the job list”* with the store
+   * already open, and `S4` *“from a non-list screen”* — so with no list
+   * there was nowhere to navigate from or to, and the nearest thing to
+   * “opening a form” was application launch. That is exactly how a cold
+   * start came to be recorded under `S1`'s name.
+   */
+  const [screen, setScreen] = React.useState<'list' | 'form'>('list');
+  const [job, setJob] = React.useState<Job | null>(null);
+  const worklist = React.useMemo(() => makeWorklist(DEFAULT_WORKLIST_VOLUME), []);
+
+  /**
+   * ⚠ THE RESOLVER IS ARMED BEFORE THE NAVIGATION IS TRIGGERED, never
+   * after. Layout can complete before a promise created afterwards would
+   * have registered its callback, and the campaign would then wait forever
+   * on an event that had already happened — a hang that looks like a slow
+   * device rather than a lost signal.
+   */
+  const listReady = React.useRef<null | (() => void)>(null);
+  const formReady = React.useRef<null | (() => void)>(null);
+
+  const signalListReady = React.useCallback(() => {
+    const r = listReady.current;
+    listReady.current = null;
+    r?.();
+  }, []);
+  const signalFormReady = React.useCallback(() => {
+    const r = formReady.current;
+    formReady.current = null;
+    r?.();
+  }, []);
   React.useEffect(() => {
     let live = true;
     (async () => {
@@ -428,9 +529,179 @@ export default function App(): React.JSX.Element {
   }
   if (!ready) return <Text style={styles.status}>opening the encrypted store…</Text>;
 
+  /**
+   * ➕ THE OPERATOR CONTROLS BELONG ON BOTH SCREENS. The worklist is now
+   * the default screen, and leaving the campaign buttons only on the form
+   * would mean starting a run required navigating away from the screen
+   * `S1` and `S4` start from.
+   */
+  const controls = (
+    <>
+      {/*
+        SyR-221: "On a phone, the actions used most often during capture shall be
+        reachable by the thumb of the hand holding it, in every profile." The
+        switch is one of `PRIMARY_CAPTURE_ACTIONS`, so it is pinned to the bottom
+        of the screen — inside the thumb zone — rather than put behind a settings
+        screen. ⚠ `presentation.ts` models the VERTICAL axis only, and the real
+        thumb arc is also horizontal; the far corner is what condition 3 has to
+        look at on a device.
+      */}
+      {/*
+        ⚠ Deliberately NOT in the thumb zone. SyR-221 reserves that band for
+        "the actions used most often during capture"; delivering figures is an
+        operator action between runs, and putting it under the thumb would make
+        it easy to hit by accident during a measured sequence.
+      */}
+      <View style={styles.collectorBar}>
+        <Text style={styles.note}>device label (§6d: the actual handset) — restart to apply</Text>
+        <TextInput
+          style={styles.collectorInput}
+          value={deviceLabel}
+          onChangeText={setDeviceLabel}
+          onBlur={() => { void saveDeviceLabel(deviceLabel); }}
+          placeholder="Galaxy M04"
+          autoCapitalize="words"
+          autoCorrect={false}
+          accessibilityLabel="Device label"
+        />
+        <Text style={styles.note}>fill (§6d: the state held throughout) — restart to apply</Text>
+        <TextInput
+          style={styles.collectorInput}
+          value={fill}
+          onChangeText={setFill}
+          onBlur={() => { void saveFillState(fill); }}
+          placeholder="80% of SwR-115's 2 GB budget"
+          autoCapitalize="none"
+          autoCorrect={false}
+          accessibilityLabel="Fill state"
+        />
+        <Text style={styles.note}>collector (the dev machine's LAN address)</Text>
+        <TextInput
+          style={styles.collectorInput}
+          value={collector}
+          onChangeText={setCollector}
+          onBlur={() => { void saveCollectorBase(collector); }}
+          placeholder="http://192.168.1.50:8080"
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="url"
+          accessibilityLabel="Collector address"
+        />
+        <Pressable
+          onPress={onRunCampaign}
+          disabled={busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>{busy ? 'running\u2026' : 'Run campaign: S3 + S6 (' + ITERATIONS + ' passes)'}</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => { void runNavigationCampaign('S1'); }}
+          disabled={busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>{busy ? 'running\u2026' : 'Run campaign: S1 \u2014 opening a form'}</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => { void runNavigationCampaign('S4'); }}
+          disabled={busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>{busy ? 'running\u2026' : 'Run campaign: S4 \u2014 opening the list'}</Text>
+        </Pressable>
+        {campaign ? <Text style={styles.note}>{campaign}</Text> : null}
+        {/* ➕ Named here so the operator sees WHY the other six are absent. */}
+        <Text style={styles.note}>
+          {'not drivable yet: ' +
+            (['S2', 'S5', 'S7', 'S8'] as const)
+              .map((s) => s + ' (' + (SEQUENCES[s].blockedBy ?? '').split(',')[0] + ')')
+              .join('; ')}
+        </Text>
+        <Pressable onPress={onDeliver} style={styles.capture} accessibilityRole="button">
+          <Text>
+            {campaignFigures ? 'Deliver CAMPAIGN figures' : 'Deliver marks (not a measurement)'}
+          </Text>
+        </Pressable>
+        {delivery ? <Text style={styles.note}>{delivery}</Text> : null}
+      </View>
+    
+      <View style={styles.thumbZone}>
+        {/*
+          Both of these are in `PRIMARY_CAPTURE_ACTIONS`, which is why they are
+          here and not in a menu: SyR-221 requires the actions used most often
+          during capture to be thumb-reachable IN EVERY PROFILE.
+        */}
+        <Pressable onPress={onCapture} style={styles.capture} accessibilityRole="button">
+          <Text>Capture a photograph</Text>
+        </Pressable>
+        {capture ? (
+          <View style={styles.thumbRow}>
+            <Image
+              source={{ uri: capture.uri }}
+              style={styles.thumb}
+              // S5's STOP: the thumbnail is visible, after compression and stamping.
+              onLoad={() => harness.stop('S5')}
+            />
+            {/* The stamp is shown because SwR-102 makes it part of the response,
+                and because a figure for "attached and visible" is only honest if
+                what became visible included the stamp. */}
+            <View style={styles.stamp}>
+              <Text style={styles.note}>level used: {capture.stamp.levelUsed}</Text>
+              <Text style={styles.note}>
+                {capture.nativeWidth}×{capture.nativeHeight} → long edge{' '}
+                {capture.stamp.longEdgePx ?? 'native'}
+              </Text>
+              <Text style={styles.note}>
+                {capture.stamp.location
+                  ? 'at ' +
+                    capture.stamp.location.latitude.toFixed(4) +
+                    ', ' +
+                    capture.stamp.location.longitude.toFixed(4) +
+                    ' ±' +
+                    (capture.stamp.location.accuracyMetres ?? '?') +
+                    'm'
+                  : LOCATION_UNAVAILABLE}
+              </Text>
+            </View>
+          </View>
+        ) : null}
+        <ProfileSwitch profile={profile} onSwitch={onSwitchProfile} />
+      </View>
+    </>
+  );
+
+  /**
+   * ➕ The list is the default screen, which is also what M7 assumes: `S1`
+   * starts *“from the job list”*, so landing there is the ordinary state
+   * rather than a mode the operator has to find.
+   */
+  if (screen === 'list') {
+    return (
+      <View style={styles.screen}>
+        <WorklistScreen
+          jobs={worklist}
+          profile={profile}
+          onFirstScreenful={signalListReady}
+          onOpenJob={(j) => {
+            setJob(j);
+            setScreen('form');
+          }}
+        />
+        {controls}
+      </View>
+    );
+  }
+
   return (
     <View style={styles.screen}>
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+      <Pressable onPress={() => setScreen('list')} accessibilityRole="button">
+        <Text style={styles.sectionLabel}>
+          {'\u2039 worklist' + (job ? '  \u00b7  ' + job.reference + ' \u00b7 ' + job.customer : '')}
+        </Text>
+      </Pressable>
       {form.sections.map((section) => {
         const expanded = openSection === section.id;
         return (
@@ -444,9 +715,12 @@ export default function App(): React.JSX.Element {
             {expanded &&
               form.fields
                 .filter((f) => f.section === section.id && state.state[f.id]?.visible)
-                .map((f) => (
+                .map((f, fieldIndex) => (
                   <FieldWidget
                     key={f.id}
+                    onFirstFieldLayout={
+                      expanded && fieldIndex === 0 ? signalFormReady : undefined
+                    }
                     field={f}
                     profile={profile}
                     state={state.state[f.id]!}
@@ -464,122 +738,7 @@ export default function App(): React.JSX.Element {
         );
       })}
     </ScrollView>
-    {/*
-      SyR-221: "On a phone, the actions used most often during capture shall be
-      reachable by the thumb of the hand holding it, in every profile." The
-      switch is one of `PRIMARY_CAPTURE_ACTIONS`, so it is pinned to the bottom
-      of the screen — inside the thumb zone — rather than put behind a settings
-      screen. ⚠ `presentation.ts` models the VERTICAL axis only, and the real
-      thumb arc is also horizontal; the far corner is what condition 3 has to
-      look at on a device.
-    */}
-    {/*
-      ⚠ Deliberately NOT in the thumb zone. SyR-221 reserves that band for
-      "the actions used most often during capture"; delivering figures is an
-      operator action between runs, and putting it under the thumb would make
-      it easy to hit by accident during a measured sequence.
-    */}
-    <View style={styles.collectorBar}>
-      <Text style={styles.note}>device label (§6d: the actual handset) — restart to apply</Text>
-      <TextInput
-        style={styles.collectorInput}
-        value={deviceLabel}
-        onChangeText={setDeviceLabel}
-        onBlur={() => { void saveDeviceLabel(deviceLabel); }}
-        placeholder="Galaxy M04"
-        autoCapitalize="words"
-        autoCorrect={false}
-        accessibilityLabel="Device label"
-      />
-      <Text style={styles.note}>fill (§6d: the state held throughout) — restart to apply</Text>
-      <TextInput
-        style={styles.collectorInput}
-        value={fill}
-        onChangeText={setFill}
-        onBlur={() => { void saveFillState(fill); }}
-        placeholder="80% of SwR-115's 2 GB budget"
-        autoCapitalize="none"
-        autoCorrect={false}
-        accessibilityLabel="Fill state"
-      />
-      <Text style={styles.note}>collector (the dev machine's LAN address)</Text>
-      <TextInput
-        style={styles.collectorInput}
-        value={collector}
-        onChangeText={setCollector}
-        onBlur={() => { void saveCollectorBase(collector); }}
-        placeholder="http://192.168.1.50:8080"
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="url"
-        accessibilityLabel="Collector address"
-      />
-      <Pressable
-        onPress={onRunCampaign}
-        disabled={busy}
-        style={styles.capture}
-        accessibilityRole="button"
-      >
-        <Text>{busy ? 'running\u2026' : 'Run campaign: S3 + S6 (' + ITERATIONS + ' passes)'}</Text>
-      </Pressable>
-      {campaign ? <Text style={styles.note}>{campaign}</Text> : null}
-      {/* ➕ Named here so the operator sees WHY the other six are absent. */}
-      <Text style={styles.note}>
-        {'not drivable yet: ' +
-          (['S1', 'S2', 'S4', 'S5', 'S7', 'S8'] as const)
-            .map((s) => s + ' (' + (SEQUENCES[s].blockedBy ?? '').split(',')[0] + ')')
-            .join('; ')}
-      </Text>
-      <Pressable onPress={onDeliver} style={styles.capture} accessibilityRole="button">
-        <Text>
-          {campaignFigures ? 'Deliver CAMPAIGN figures' : 'Deliver marks (not a measurement)'}
-        </Text>
-      </Pressable>
-      {delivery ? <Text style={styles.note}>{delivery}</Text> : null}
-    </View>
-
-    <View style={styles.thumbZone}>
-      {/*
-        Both of these are in `PRIMARY_CAPTURE_ACTIONS`, which is why they are
-        here and not in a menu: SyR-221 requires the actions used most often
-        during capture to be thumb-reachable IN EVERY PROFILE.
-      */}
-      <Pressable onPress={onCapture} style={styles.capture} accessibilityRole="button">
-        <Text>Capture a photograph</Text>
-      </Pressable>
-      {capture ? (
-        <View style={styles.thumbRow}>
-          <Image
-            source={{ uri: capture.uri }}
-            style={styles.thumb}
-            // S5's STOP: the thumbnail is visible, after compression and stamping.
-            onLoad={() => harness.stop('S5')}
-          />
-          {/* The stamp is shown because SwR-102 makes it part of the response,
-              and because a figure for "attached and visible" is only honest if
-              what became visible included the stamp. */}
-          <View style={styles.stamp}>
-            <Text style={styles.note}>level used: {capture.stamp.levelUsed}</Text>
-            <Text style={styles.note}>
-              {capture.nativeWidth}×{capture.nativeHeight} → long edge{' '}
-              {capture.stamp.longEdgePx ?? 'native'}
-            </Text>
-            <Text style={styles.note}>
-              {capture.stamp.location
-                ? 'at ' +
-                  capture.stamp.location.latitude.toFixed(4) +
-                  ', ' +
-                  capture.stamp.location.longitude.toFixed(4) +
-                  ' ±' +
-                  (capture.stamp.location.accuracyMetres ?? '?') +
-                  'm'
-                : LOCATION_UNAVAILABLE}
-            </Text>
-          </View>
-        </View>
-      ) : null}
-      <ProfileSwitch profile={profile} onSwitch={onSwitchProfile} />
-    </View>
+    {controls}
     </View>
   );
 }

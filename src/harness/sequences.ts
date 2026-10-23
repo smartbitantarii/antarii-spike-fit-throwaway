@@ -35,10 +35,7 @@ export const SEQUENCES: Readonly<Record<SeqId, SequenceSpec>> = Object.freeze({
       'Wait until the first field is focusable. mark stop.',
       'Leave the form without saving; return to the list. (reset)',
     ],
-    drivable: false,
-    blockedBy:
-      'the prototype has no job list, so there is nowhere to tap a form entry FROM and nowhere ' +
-      'to return to. Opening the form by remounting would measure a remount, not a navigation.',
+    drivable: true,
   },
   S2: {
     id: 'S2',
@@ -72,8 +69,7 @@ export const SEQUENCES: Readonly<Record<SeqId, SequenceSpec>> = Object.freeze({
       'Wait until the first screenful is interactive. mark stop.',
       'Navigate away. (reset)',
     ],
-    drivable: false,
-    blockedBy: 'the prototype has no job or form list screen, and no worklist volume to load.',
+    drivable: true,
   },
   S5: {
     id: 'S5',
@@ -115,6 +111,14 @@ export const SEQUENCES: Readonly<Record<SeqId, SequenceSpec>> = Object.freeze({
     blockedBy: 'the pricing resolver does not exist — ADR-005 spike territory, not built.',
   },
 });
+
+/**
+ * ✅ S1 and S4 became drivable once the worklist existed (2026-10-23). Both
+ * are NAVIGATIONS — M7 starts S1 "from the job list" with the store already
+ * open, and S4 "from a non-list screen" — so neither could be performed at
+ * all while there was nowhere to navigate between. ➕ *That absence is also
+ * what let a cold start be instrumented under S1's name.*
+ */
 
 /**
  * ⚠ S3 AND S6 SHARE ONE START, which is M7's design and not an optimisation:

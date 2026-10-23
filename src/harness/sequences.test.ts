@@ -50,8 +50,17 @@ test('every step list names where the clock starts and stops', () => {
 
 // --------------------------------------------- what can actually be driven
 
-test('🔴 only S3 and S6 are drivable today, and that is recorded rather than discovered', () => {
-  assert.deepEqual(drivableSequences().sort(), ['S3', 'S6']);
+test('🔴 the drivable set is recorded rather than discovered at a bench', () => {
+  // S1 and S4 joined on 2026-10-23 when the worklist gave them somewhere to
+  // navigate between. S2, S5, S7 and S8 still cannot be performed faithfully.
+  assert.deepEqual(drivableSequences().sort(), ['S1', 'S3', 'S4', 'S6']);
+});
+
+test('S1 and S4 are NAVIGATIONS, which is why they needed a list and not a remount', () => {
+  assert.match(SEQUENCES.S1.steps[0]!, /From the job list/);
+  assert.match(SEQUENCES.S4.steps[0]!, /From a non-list screen/);
+  assert.equal(SEQUENCES.S1.blockedBy, undefined);
+  assert.equal(SEQUENCES.S4.blockedBy, undefined);
 });
 
 test('every undrivable sequence says exactly what is missing, never a vague "not yet"', () => {
@@ -68,9 +77,7 @@ test('every undrivable sequence says exactly what is missing, never a vague "not
 
 test('the blockers name a missing THING, not a missing intention', () => {
   // A reason like "not implemented" tells a reader nothing about what to do.
-  assert.match(SEQUENCES.S1.blockedBy!, /no job list/);
   assert.match(SEQUENCES.S2.blockedBy!, /focus/);
-  assert.match(SEQUENCES.S4.blockedBy!, /no job or form list/);
   assert.match(SEQUENCES.S5.blockedBy!, /fixture/);
   assert.match(SEQUENCES.S7.blockedBy!, /evaluator/);
   assert.match(SEQUENCES.S8.blockedBy!, /pricing resolver/);

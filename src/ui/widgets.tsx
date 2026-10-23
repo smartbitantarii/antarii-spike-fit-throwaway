@@ -47,6 +47,14 @@ export function StatusLine(props: { profile: Profile; kind: StatusKind }): React
 // ------------------------------------------------------------- the eight types
 
 interface WidgetProps {
+  /**
+   * ⚠ `S1` stops when *“the first field is focusable”*, which React does
+   * not announce. Layout is the closest observable — a field that has been
+   * laid out can take focus — so the FIRST field on the screen carries this
+   * and nothing else does. Passing it to every field would stop the clock
+   * at whichever happened to lay out last.
+   */
+  onFirstFieldLayout?: () => void;
   field: FieldDef;
   profile: Profile;
   state: FieldState;
@@ -239,7 +247,11 @@ export function FieldWidget(props: WidgetProps): React.JSX.Element {
   })();
 
   return (
-    <View style={{ marginBottom: t.rowGapDp }} accessible={false}>
+    <View
+      style={{ marginBottom: t.rowGapDp }}
+      accessible={false}
+      onLayout={props.onFirstFieldLayout}
+    >
       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
         {label}
         {/* SwR-053: required is announced in TEXT, not by the asterisk alone. */}
