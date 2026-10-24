@@ -147,28 +147,118 @@ async function prepareFromImage(
  * stamping, which is what `SwR-086`/`SwR-102` bind”*. The camera itself is
  * exercised once in condition 4's capability check, where it belongs.
  *
- * ⚠ THE ASSET IS RESOLVED BEFORE THE CLOCK STARTS. `loadAsync` may copy the
- * bundled file out on first use, and that cost belongs to neither the shutter
- * nor the compression — including it would inflate the first iteration and
- * nothing else, which is precisely the shape a discarded warm-up is supposed
- * to absorb rather than a cost we introduce ourselves.
+ * ⚠ THE ASSET IS RESOLVED BEFORE THE CLOCK STARTS, AND ONLY ONCE. Resolving it
+ * copies the bundled file out of the APK on first use, and that cost belongs to
+ * neither the shutter nor the compression — including it would inflate the
+ * first iteration and nothing else, which is precisely the shape a discarded
+ * warm-up is supposed to absorb rather than a cost we introduce ourselves.
+ * ➕ Memoising it means the cost is not merely outside the clock but absent
+ * from every iteration after the first, so no reader has to take the clock
+ * boundary on trust.
  */
 export async function captureFromFixture(
   plan: CapturePlan,
   onShutter?: () => void,
 ): Promise<CaptureResult> {
-  const [asset] = await Asset.loadAsync(require('../../assets/s5-fixture.jpg'));
-  if (!asset?.localUri) throw new Error('the S5 fixture could not be resolved to a local file');
+  const file = await resolveFixtureOnce();
 
   // Everything above is setup. THIS is the shutter returning an image.
   if (onShutter) onShutter();
 
-  return prepareFromImage(
-    asset.localUri,
-    asset.width ?? FIXTURE_WIDTH,
-    asset.height ?? FIXTURE_HEIGHT,
-    plan,
-  );
+  return prepareFromImage(file.uri, file.width, file.height, plan);
+}
+
+interface FixtureFile {
+  uri: string;
+  width: number;
+  height: number;
+}
+
+/**
+ * 🔴 RESOLVED ONCE, AND NOT THE WAY THE DOCUMENTATION SHOWS — BECAUSE THE
+ * DOCUMENTED WAY IS BROKEN IN A RELEASE ANDROID BUILD.
+ *
+ * `expo-asset`'s own example is `const [{ localUri }] =
+ * await Asset.loadAsync(require('./assets/x.png'))`, and that is what this
+ * function used to be. On the device it failed on the WARM-UP ITERATION with
+ * *“Could not load the image: assets_s5fixture → Loading bitmap failed”*.
+ *
+ * ⚠ THE CAUSE, read in `expo-asset` 58.0.16's `Asset.fromModule`: Metro bundles
+ * a required image into a release APK as an Android DRAWABLE RESOURCE, and the
+ * library then does this —
+ *
+ *     // For images backward compatibility,
+ *     // keeps localUri the same as uri for React Native's Image that
+ *     // works fine with drawable resource names.
+ *     if (Platform.OS === 'android' && !uri.includes(':') && (meta.width || meta.height)) {
+ *       asset.localUri = asset.uri;   // = 'assets_s5fixture'
+ *       asset.downloaded = true;      // so downloadAsync() returns immediately
+ *     }
+ *
+ * — so `localUri` is the bare resource name and NO FILE IS EVER PRODUCED.
+ * React Native's `<Image>` understands a drawable name, which is what the
+ * shortcut is for; `ImageManipulator` takes a uri and does not.
+ *
+ * ➕ THE FIX ASKS FOR THE COPY THE SHORTCUT SKIPPED. `AssetModule.kt` already
+ * handles a name with no scheme — *“if (!uriString.contains(\":\")) return
+ * openAssetResourceStream(context, uriString)”* — and `findResourceId` looks it
+ * up in `res/raw` then `res/drawable`. The native side could always copy this
+ * out; only the JS shortcut stopped it being asked. Clearing the two public
+ * fields asks it, and the asset's real md5 means the copy happens once.
+ *
+ * ⚠ THIS IS A WORKAROUND AROUND A LIBRARY'S INTERNAL SHORTCUT, and it is
+ * recorded as one rather than hidden: it writes two documented public fields of
+ * someone else's object. The alternative considered was giving the fixture a
+ * non-image extension so the branch's `(meta.width || meta.height)` test never
+ * fires — architecturally cleaner, but it rests on an UNVERIFIED assumption
+ * about where the Gradle asset step files a custom extension, where this route
+ * was read end to end in both the JavaScript and the Kotlin.
+ *
+ * ✕ AND IT IS INVISIBLE IN DEVELOPMENT. In Expo Go the other branch runs, the
+ * uri is an http URL and the download really happens. No amount of development
+ * testing would have found this; one release APK on one real device did.
+ */
+let fixture: FixtureFile | null = null;
+
+async function resolveFixtureOnce(): Promise<FixtureFile> {
+  if (fixture) return fixture;
+
+  const asset = Asset.fromModule(require('../../assets/s5-fixture.jpg'));
+
+  /**
+   * ⚠ THE TEST IS FOR A USABLE URI, NOT A PRESENT ONE. The guard this
+   * replaces was `if (!asset.localUri) throw`, and it PASSED — the resource
+   * name is a perfectly truthy string that simply is not a path. A truthy
+   * value is not evidence of a usable value. A uri has a scheme; a drawable
+   * resource name has no colon in it at all.
+   */
+  if (!asset.localUri?.includes(':')) {
+    asset.localUri = null;
+    asset.downloaded = false;
+    await asset.downloadAsync();
+  }
+
+  if (!asset.localUri?.includes(':')) {
+    throw new Error('the S5 fixture did not resolve to a file uri: ' + String(asset.localUri));
+  }
+
+  /**
+   * ➕ CHECKED RATHER THAN TRUSTED. Metro records an image's real dimensions,
+   * so if the fixture is ever regenerated at a different size the constants
+   * below would quietly describe the wrong image and `S5` would measure a
+   * different amount of work under the same name. Better to disagree loudly.
+   */
+  const width = asset.width ?? FIXTURE_WIDTH;
+  const height = asset.height ?? FIXTURE_HEIGHT;
+  if (width !== FIXTURE_WIDTH || height !== FIXTURE_HEIGHT) {
+    throw new Error(
+      'the S5 fixture is ' + width + '×' + height + ', not the recorded ' +
+        FIXTURE_WIDTH + '×' + FIXTURE_HEIGHT,
+    );
+  }
+
+  fixture = { uri: asset.localUri, width, height };
+  return fixture;
 }
 
 /**
