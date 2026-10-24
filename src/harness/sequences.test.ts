@@ -53,7 +53,7 @@ test('every step list names where the clock starts and stops', () => {
 test('🔴 the drivable set is recorded rather than discovered at a bench', () => {
   // S1 and S4 joined on 2026-10-23 when the worklist gave them somewhere to
   // navigate between. S2, S5, S7 and S8 still cannot be performed faithfully.
-  assert.deepEqual(drivableSequences().sort(), ['S1', 'S3', 'S4', 'S6']);
+  assert.deepEqual(drivableSequences().sort(), ['S1', 'S3', 'S4', 'S5', 'S6']);
 });
 
 test('S1 and S4 are NAVIGATIONS, which is why they needed a list and not a remount', () => {
@@ -78,17 +78,17 @@ test('every undrivable sequence says exactly what is missing, never a vague "not
 test('the blockers name a missing THING, not a missing intention', () => {
   // A reason like "not implemented" tells a reader nothing about what to do.
   assert.match(SEQUENCES.S2.blockedBy!, /focus/);
-  assert.match(SEQUENCES.S5.blockedBy!, /fixture/);
   assert.match(SEQUENCES.S7.blockedBy!, /evaluator/);
   assert.match(SEQUENCES.S8.blockedBy!, /pricing resolver/);
 });
 
-test('S5 is blocked by the FIXTURE, not by the camera needing a human', () => {
-  // ⚠ M7 §3 says "a fixed fixture image, not a live capture" — so S5 is
-  // automatable in principle, and recording it as "needs a human 101 times"
-  // would have written off a sequence that only needs an asset.
+test('S5 became drivable by adding an ASSET, not a feature', () => {
+  // ⚠ M7 §3 says "a fixed fixture image, not a live capture" — reading that
+  // step is what stopped S5 being written off as "needs a human 101 times".
+  // It only ever needed a file.
   assert.match(SEQUENCES.S5.steps.join(' '), /fixed fixture image, not a live capture/);
-  assert.match(SEQUENCES.S5.blockedBy!, /no fixture bundled/);
+  assert.equal(SEQUENCES.S5.blockedBy, undefined);
+  assert.equal(SEQUENCES.S5.drivable, true);
 });
 
 // ------------------------------------------------- the shared start

@@ -16,6 +16,7 @@
  * machine. None of `SwR-086`'s layering logic appears in this file, by design.
  */
 import * as ImagePicker from 'expo-image-picker';
+import { Asset } from 'expo-asset';
 import { ImageManipulator } from 'expo-image-manipulator';
 import * as Location from 'expo-location';
 import { File } from 'expo-file-system';
@@ -105,20 +106,93 @@ export async function captureAndPrepare(
   // compression and stamping the figure has to absorb.
   if (onShutter) onShutter();
 
+  return prepareFromImage(asset.uri, asset.width, asset.height, plan);
+}
+
+/**
+ * 🔴 THE ONE PIPELINE BOTH PATHS USE, AND THAT IS THE POINT.
+ *
+ * `S5` measures *“compression (`SwR-086`) and stamping (`SwR-102`)”*. If the
+ * fixture path did its own compressing, the figure would describe a pipeline
+ * the application does not run — a measurement of the measuring apparatus.
+ * Extracting this was the first step of adding the fixture, not an afterthought.
+ */
+async function prepareFromImage(
+  uri: string,
+  width: number,
+  height: number,
+  plan: CapturePlan,
+): Promise<CaptureResult> {
   // Requested concurrently because `SwR-102` binds the fix to "the capture
   // moment": serialising them would push the location later than the moment
   // it is supposed to describe.
-  const [uri, fix] = await Promise.all([
-    compressToLongEdge(asset.uri, asset.width, asset.height, plan.longEdgePx),
+  const [out, fix] = await Promise.all([
+    compressToLongEdge(uri, width, height, plan.longEdgePx),
     locationWithinTheMoment(),
   ]);
 
   return {
-    uri,
+    uri: out,
     stamp: stamp(new Date().toISOString(), plan.level, fix),
-    nativeWidth: asset.width,
-    nativeHeight: asset.height,
+    nativeWidth: width,
+    nativeHeight: height,
   };
+}
+
+/**
+ * `S5`'s source: a fixed fixture rather than the camera.
+ *
+ * ➕ M7 §4a's reason, verbatim: *“a live capture varies by lighting and
+ * sensor warm-up, so it measures the camera rather than compression and
+ * stamping, which is what `SwR-086`/`SwR-102` bind”*. The camera itself is
+ * exercised once in condition 4's capability check, where it belongs.
+ *
+ * ⚠ THE ASSET IS RESOLVED BEFORE THE CLOCK STARTS. `loadAsync` may copy the
+ * bundled file out on first use, and that cost belongs to neither the shutter
+ * nor the compression — including it would inflate the first iteration and
+ * nothing else, which is precisely the shape a discarded warm-up is supposed
+ * to absorb rather than a cost we introduce ourselves.
+ */
+export async function captureFromFixture(
+  plan: CapturePlan,
+  onShutter?: () => void,
+): Promise<CaptureResult> {
+  const [asset] = await Asset.loadAsync(require('../../assets/s5-fixture.jpg'));
+  if (!asset?.localUri) throw new Error('the S5 fixture could not be resolved to a local file');
+
+  // Everything above is setup. THIS is the shutter returning an image.
+  if (onShutter) onShutter();
+
+  return prepareFromImage(
+    asset.localUri,
+    asset.width ?? FIXTURE_WIDTH,
+    asset.height ?? FIXTURE_HEIGHT,
+    plan,
+  );
+}
+
+/**
+ * The fixture's own dimensions, as a fallback if the asset does not report
+ * them. ⚠ They are 4000 × 3000 because `SwR-086`'s Standard level is
+ * `N-C4`'s **1600 px long edge** — a fixture near that size would make the
+ * resize do almost no work and `S5` would measure almost nothing.
+ */
+export const FIXTURE_WIDTH = 4000;
+export const FIXTURE_HEIGHT = 3000;
+
+/**
+ * M7 §3 step 4: *“delete the attachment; confirm the staging file is gone”*.
+ *
+ * ⚠ THE READING IS LABELLED. At capture time the only file the pipeline has
+ * produced is the compressed output, so that is what is deleted and checked.
+ * The staging files ADR-003 §5.3.3 names are created by the UPLOAD path, and
+ * leg (ii) already asserts none survives there — this reset cannot check a
+ * file that this sequence never creates.
+ */
+export async function discardCapture(uri: string): Promise<boolean> {
+  const f = new File(uri);
+  if (f.exists) f.delete();
+  return !new File(uri).exists;
 }
 
 /**

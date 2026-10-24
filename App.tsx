@@ -32,7 +32,12 @@ import { makeWorklist, jobForIteration, DEFAULT_WORKLIST_VOLUME, type Job } from
 import { WorklistScreen } from './src/ui/worklist-screen.tsx';
 import { BUILD_ID } from './src/build.ts';
 import { planCapture, SHIPPED_LAYERS, LOCATION_UNAVAILABLE } from './src/media/prepare.ts';
-import { captureAndPrepare, type CaptureResult } from './src/platform/expo-media.ts';
+import {
+  captureAndPrepare,
+  captureFromFixture,
+  discardCapture,
+  type CaptureResult,
+} from './src/platform/expo-media.ts';
 import { devicePayload, stableJson } from './src/harness/report.ts';
 import { runCampaign, ITERATIONS } from './src/harness/campaign.ts';
 import { SEQUENCES, stepsForRecord } from './src/harness/sequences.ts';
@@ -336,6 +341,72 @@ export default function App(): React.JSX.Element {
     },
     [awaitSignal, runContext, worklist],
   );
+
+  /**
+   * `S5` — a photograph attached and visible, target **2 s**.
+   *
+   * ➕ The source is M7 §4a's **fixed fixture**, not the camera: *“a live
+   * capture varies by lighting and sensor warm-up, so it measures the
+   * camera rather than compression and stamping”*. ⚠ It is also the only
+   * way to run the sequence 101 times at all — nobody can press a shutter
+   * a hundred times and call the result a controlled sample.
+   *
+   * 🔴 THE CLOCK STOPS WHEN THE THUMBNAIL HAS LAID OUT, not when the
+   * file is written. M7's stop is *“the thumbnail is visible in the form,
+   * AFTER compression and stamping”* — a property of the screen. Stopping
+   * at the end of `captureFromFixture` would omit the decode and draw of a
+   * freshly written image, which is part of what the worker waits for.
+   */
+  const thumbReady = React.useRef<null | (() => void)>(null);
+  const signalThumbReady = React.useCallback(() => {
+    const r = thumbReady.current;
+    thumbReady.current = null;
+    r?.();
+  }, []);
+
+  const runS5Campaign = React.useCallback(async () => {
+    setBusy(true);
+    setCampaign('starting S5\u2026');
+    try {
+      const fresh = new Harness(runContext, () => performance.now());
+      const plan = planCapture(SHIPPED_LAYERS);
+
+      const result = await runCampaign(
+        fresh,
+        'S5',
+        async () => {
+          const shot = await new Promise<CaptureResult>((resolve, reject) => {
+            captureFromFixture(plan, () => fresh.start('S5')).then(resolve, reject);
+          });
+
+          // Wait for the thumbnail itself, with a deadline for the same
+          // reason every other signal has one: a lost signal is otherwise
+          // indistinguishable from a slow device.
+          await awaitSignal(thumbReady, 'thumbnail', () => setCapture(shot));
+          fresh.stop('S5');
+
+          // M7 step 4 (reset): delete the attachment and confirm it is gone.
+          setCapture(null);
+          const gone = await discardCapture(shot.uri);
+          if (!gone) throw new Error('the captured file survived its deletion: ' + shot.uri);
+        },
+        {
+          onProgress: (p) =>
+            setCampaign('S5 ' + p.iteration + '/' + p.total + (p.warmup ? ' (warm-up)' : '')),
+        },
+      );
+
+      setCampaignFigures([result.figure]);
+      setCampaign(
+        'S5 n=' + result.figure.n + ' p95=' + result.figure.p95Ms + 'ms target=' +
+          result.figure.targetMs + ' ' + (result.figure.pass ? 'PASS' : 'FAIL') + ' \u2014 now Deliver',
+      );
+    } catch (err) {
+      setCampaign('S5 failed: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setBusy(false);
+    }
+  }, [awaitSignal, runContext, signalThumbReady]);
 
   const onDeliver = React.useCallback(async () => {
     setDelivery('working\u2026');
@@ -678,6 +749,14 @@ export default function App(): React.JSX.Element {
           <Text>{busy ? 'running\u2026' : 'Run campaign: S1 \u2014 opening a form'}</Text>
         </Pressable>
         <Pressable
+          onPress={() => { void runS5Campaign(); }}
+          disabled={busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>{busy ? 'running…' : 'Run campaign: S5 — photograph attached'}</Text>
+        </Pressable>
+        <Pressable
           onPress={() => { void runNavigationCampaign('S4'); }}
           disabled={busy}
           style={styles.capture}
@@ -689,7 +768,7 @@ export default function App(): React.JSX.Element {
         {/* ➕ Named here so the operator sees WHY the other six are absent. */}
         <Text style={styles.note}>
           {'not drivable yet: ' +
-            (['S2', 'S5', 'S7', 'S8'] as const)
+            (['S2', 'S7', 'S8'] as const)
               .map((s) => s + ' (' + (SEQUENCES[s].blockedBy ?? '').split(',')[0] + ')')
               .join('; ')}
         </Text>
@@ -716,7 +795,13 @@ export default function App(): React.JSX.Element {
               source={{ uri: capture.uri }}
               style={styles.thumb}
               // S5's STOP: the thumbnail is visible, after compression and stamping.
-              onLoad={() => harness.stop('S5')}
+              /**
+               * 🔴 It used to call `harness.stop('S5')` directly, which
+               * marked the app's own harness during ordinary use — the same
+               * mistake that put a cold start under `S1`'s name. It now only
+               * SIGNALS; the campaign decides whether anything is being timed.
+               */
+              onLoad={signalThumbReady}
             />
             {/* The stamp is shown because SwR-102 makes it part of the response,
                 and because a figure for "attached and visible" is only honest if

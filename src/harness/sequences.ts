@@ -79,10 +79,7 @@ export const SEQUENCES: Readonly<Record<SeqId, SequenceSpec>> = Object.freeze({
       'Wait until the thumbnail is visible, after compression and stamping. mark stop.',
       'Delete the attachment; confirm the staging file is gone (ADR-003 §5.3.3). (reset)',
     ],
-    drivable: false,
-    blockedBy:
-      'M7 calls for a FIXED FIXTURE image rather than a live capture, and the prototype has no ' +
-      'fixture bundled — it only drives the real camera, which cannot be repeated 101 times by hand.',
+    drivable: true,
   },
   S6: {
     id: 'S6',
