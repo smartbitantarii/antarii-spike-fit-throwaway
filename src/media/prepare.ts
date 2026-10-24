@@ -175,6 +175,38 @@ export const LOCATION_UNAVAILABLE = 'location unavailable';
  * capture that threw because the worker had denied location would lose
  * evidence to a permission prompt.
  */
+/**
+ * 🔴 HOW LONG A CAPTURE MAY WAIT FOR A LOCATION FIX. **Decision — owner,
+ * 2026-10-24: 1000 ms**, chosen against measured evidence rather than taste.
+ *
+ * ⚠ THE REQUIREMENTS ALREADY BOUND THIS — the author first read them as not
+ * doing so, and was wrong. `SwR-102` stamps the location *“where the device can
+ * provide it **within the capture moment**”* — a CONDITIONAL, not an instruction
+ * to wait — and directs that *“where it is unavailable or withheld the stamp
+ * **shall** record *location unavailable* and the capture **shall** proceed”*.
+ * `SwR-100` then puts the whole capture, *“**including** … stamping
+ * (SwR-102)”*, under **2 seconds**. So an unbounded wait violates both; the
+ * requirements needed no amendment, only obeying.
+ *
+ * ➕ WHY 1000 ms AND NOT A ROUND GUESS. On the Galaxy A35 5G, `S5` over
+ * `n`=100 with location granted ran **91 captures at a ~265 ms median total**
+ * and **9 at ~27.1 s** — a 1.07% spread across those nine, which is the
+ * signature of a platform timeout, not of slow work. So the device usually has
+ * a fresh fix and only periodically must acquire one. **A 1000 ms deadline
+ * keeps the fix on roughly 91% of photographs and stamps the rest
+ * *unavailable*, while leaving the measured ~265 ms pipeline most of its
+ * 2000 ms budget.** *Shorter would discard fixes that were about to arrive;
+ * longer would leave no room for the pipeline's own tail.*
+ *
+ * ✕ `getLastKnownPositionAsync` was considered and NOT used, though it takes
+ * `maxAge` and `requiredAccuracy` and returns at once. A fix **taken** minutes
+ * ago elsewhere is not one the device *“can provide within the capture
+ * moment”*, and **wrong location evidence is worse than none** on a photograph
+ * whose purpose is evidence. *Adopting it would be a reading of that clause,
+ * not a performance tweak.*
+ */
+export const LOCATION_DEADLINE_MS = 1000;
+
 export function stamp(
   deviceTimeIso: string,
   level: QualityLevel,

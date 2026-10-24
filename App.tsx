@@ -31,7 +31,12 @@ import { spikeForm } from './src/form/spike-form.ts';
 import { makeWorklist, jobForIteration, DEFAULT_WORKLIST_VOLUME, type Job } from './src/form/worklist.ts';
 import { WorklistScreen } from './src/ui/worklist-screen.tsx';
 import { BUILD_ID } from './src/build.ts';
-import { planCapture, SHIPPED_LAYERS, LOCATION_UNAVAILABLE } from './src/media/prepare.ts';
+import {
+  planCapture,
+  SHIPPED_LAYERS,
+  LOCATION_UNAVAILABLE,
+  LOCATION_DEADLINE_MS,
+} from './src/media/prepare.ts';
 import {
   captureAndPrepare,
   captureFromFixture,
@@ -454,6 +459,7 @@ export default function App(): React.JSX.Element {
         new Date().toISOString(),
         isCampaign ? stepsForRecord(campaignFigures!.map((f) => f.seq)) : {},
         coldStartMs,
+        LOCATION_DEADLINE_MS,
       );
       const json = stableJson(payload);
 

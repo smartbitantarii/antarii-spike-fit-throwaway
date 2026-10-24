@@ -356,6 +356,19 @@ export interface DevicePayload {
    * without a verdict is the only honest shape.*
    */
   coldStartMs: number | null;
+  /**
+   * ➕ A RUN CONDITION, RECORDED BECAUSE IT DETERMINES THE FIGURE. `S5`'s total
+   * includes the wait for a location fix, so the deadline in force is part of
+   * what the number means — and a reader seeing *“S5 p95 = 420 ms”* cannot
+   * otherwise tell whether the deadline was 300 ms or 1000 ms. `buildId` is a
+   * hand-typed label here, not a commit, so it does not resolve the question.
+   *
+   * ⚠ This exists because of the refresh-rate lesson: **S6 − S3 was read
+   * against a frame time that was never recorded**, and the figure could not be
+   * re-interpreted afterwards. *A condition that shapes a figure and is not
+   * written down makes the figure un-rereadable.*
+   */
+  locationDeadlineMs: number | null;
 }
 
 const KIND_NOTE: Readonly<Record<DevicePayloadKind, string>> = Object.freeze({
@@ -373,6 +386,7 @@ export function devicePayload(
   atIso: string = new Date().toISOString(),
   steps: Record<string, string[]> = {},
   coldStartMs: number | null = null,
+  locationDeadlineMs: number | null = null,
 ): DevicePayload {
   return {
     kind,
@@ -385,5 +399,6 @@ export function devicePayload(
     fill: context.fill,
     figures,
     coldStartMs,
+    locationDeadlineMs,
   };
 }

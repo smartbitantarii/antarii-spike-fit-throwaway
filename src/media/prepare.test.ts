@@ -19,7 +19,9 @@ import {
   LOCATION_UNAVAILABLE,
   type QualityLayers,
   type QualityLevel,
+  LOCATION_DEADLINE_MS,
 } from './prepare.ts';
+import { TARGET_MS } from '../harness/harness.ts';
 import {
   mintOurSessionId,
   fromPlatform,
@@ -237,4 +239,29 @@ test('SwR-102: a position with no accuracy keeps the position and shows the abse
   assert.equal(s.location!.latitude, 51.5, 'the position must not be discarded');
   assert.equal(s.location!.accuracyMetres, null);
   assert.equal(s.locationNote, null, 'this is NOT "location unavailable" — there is a location');
+});
+
+test('SwR-102’s location deadline fits inside the budget SwR-100 gives the capture', () => {
+  /**
+   * 🔴 THE POINT IS THE RELATIONSHIP BETWEEN TWO CONSTANTS, NOT EITHER NUMBER.
+   * `SwR-100` puts the capture, *“including … stamping (SwR-102)”*, under 2 s,
+   * and the location wait sits inside that. So the deadline is checked against
+   * the budget it has to live in — a deadline at or above it could not be met
+   * by any pipeline, however fast, and asserting `=== 1000` would only restate
+   * the constant rather than test anything.
+   *
+   * ➕ The 500 ms floor comes from the measurement: the pipeline's median on
+   * the Galaxy A35 5G was ~265 ms and its slowest sampled iteration ~1248 ms,
+   * so a deadline leaving less than half a second would make the budget
+   * unreachable in practice while still being arithmetically “inside” it.
+   */
+  assert.ok(
+    LOCATION_DEADLINE_MS > 0,
+    'a non-positive deadline would stamp every photograph location unavailable',
+  );
+  assert.ok(
+    LOCATION_DEADLINE_MS <= TARGET_MS.S5 - 500,
+    'the deadline (' + LOCATION_DEADLINE_MS + ' ms) must leave at least 500 ms of S5’s ' +
+      TARGET_MS.S5 + ' ms budget for the pipeline itself',
+  );
 });

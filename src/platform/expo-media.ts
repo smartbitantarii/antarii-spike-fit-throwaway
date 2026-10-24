@@ -22,7 +22,13 @@ import * as Location from 'expo-location';
 import { File } from 'expo-file-system';
 import * as Crypto from 'expo-crypto';
 
-import { stamp, type CapturePlan, type CaptureStamp, type LocationFix } from '../media/prepare.ts';
+import {
+  LOCATION_DEADLINE_MS,
+  stamp,
+  type CapturePlan,
+  type CaptureStamp,
+  type LocationFix,
+} from '../media/prepare.ts';
 import { mintOurSessionId, type TransferSessionInfo } from '../media/transfer-session.ts';
 import type { PartReceipt, PlatformUpload, StagingFile } from '../media/media.ts';
 
@@ -55,12 +61,23 @@ export function newTransferSession(): TransferSessionInfo {
  *
  * ⚠ Hence every failure path returns null rather than throwing. A denied
  * permission, a timeout or a platform error must not cost us the photograph.
+ *
+ * 🔴 AND THE WAIT IS BOUNDED, WHICH IT WAS NOT. `getCurrentPositionAsync`
+ * **requests a fresh fix** — the library contrasts it with
+ * `getLastKnownPositionAsync`, *“faster … as it doesn't request for the current
+ * location”* — and `LocationOptions` offers **no timeout**, so there is no way
+ * to bound it through the call. Unbounded, it stalled `S5` at a **27.1 s p95
+ * against a 2 s target**. The deadline is imposed here instead, and
+ * `prepare.ts` records why the number is what it is.
  */
 async function locationWithinTheMoment(): Promise<LocationFix | null> {
   try {
     const perm = await Location.requestForegroundPermissionsAsync();
     if (!perm.granted) return null;
-    const pos = await Location.getCurrentPositionAsync({});
+
+    const pos = await withinTheMoment(Location.getCurrentPositionAsync({}));
+    if (!pos) return null;
+
     return {
       latitude: pos.coords.latitude,
       longitude: pos.coords.longitude,
@@ -70,6 +87,35 @@ async function locationWithinTheMoment(): Promise<LocationFix | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Resolves with the fix, or with `null` once `LOCATION_DEADLINE_MS` has passed.
+ *
+ * ⚠ THE ABANDONED REQUEST IS NOT CANCELLED, because `expo-location` offers no
+ * way to cancel one. It is left to settle into handlers that do nothing — which
+ * is why `then` is given BOTH arms rather than a bare `then`: a rejection
+ * arriving twenty-six seconds later with no handler would surface as an
+ * unhandled rejection against whatever the application was doing by then, in a
+ * place bearing no relation to the capture that caused it.
+ *
+ * ➕ Resolving an already-resolved promise is a no-op, so the late arrival is
+ * harmless rather than merely unlikely.
+ */
+function withinTheMoment<T>(pending: Promise<T>): Promise<T | null> {
+  return new Promise<T | null>((resolve) => {
+    const timer = setTimeout(() => resolve(null), LOCATION_DEADLINE_MS);
+    pending.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(null);
+      },
+    );
+  });
 }
 
 export interface CaptureResult {
