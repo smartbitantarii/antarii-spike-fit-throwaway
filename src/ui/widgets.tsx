@@ -55,6 +55,16 @@ interface WidgetProps {
    * at whichever happened to lay out last.
    */
   onFirstFieldLayout?: () => void;
+  /**
+   * 🔴 `S2`'s HANDLE ON THE FIELD. The campaign must move focus itself —
+   * “nothing manages focus programmatically” was what blocked `S2` — so the
+   * focusable widgets hand their `TextInput` up by ref. ⚠ Only `text` and
+   * `number` call it; `FOCUSABLE_FIELD_TYPES` in `model.ts` is the declared
+   * list, and a test checks this file against it rather than trusting it.
+   */
+  registerInput?: (id: string, input: TextInput | null) => void;
+  /** `S2`'s STOP: the target field has taken focus and accepts input. */
+  onFieldFocus?: (id: string) => void;
   field: FieldDef;
   profile: Profile;
   state: FieldState;
@@ -90,7 +100,7 @@ function controlStyle(profile: Profile, valid: boolean) {
 }
 
 export function FieldWidget(props: WidgetProps): React.JSX.Element {
-  const { field, profile, state, value, onCommit } = props;
+  const { field, profile, state, value, onCommit, registerInput, onFieldFocus } = props;
   const { t } = useBox(profile, field);
 
   const label = (
@@ -104,6 +114,8 @@ export function FieldWidget(props: WidgetProps): React.JSX.Element {
       case 'text':
         return (
           <TextInput
+            ref={(r) => registerInput?.(field.id, r)}
+            onFocus={() => onFieldFocus?.(field.id)}
             style={[controlStyle(profile, state.valid), { fontSize: t.valueDp, color: t.text }]}
             defaultValue={String(value ?? '')}
             onBlur={(e) => onCommit(field.id, e.nativeEvent.text)}
@@ -114,6 +126,8 @@ export function FieldWidget(props: WidgetProps): React.JSX.Element {
       case 'number':
         return (
           <TextInput
+            ref={(r) => registerInput?.(field.id, r)}
+            onFocus={() => onFieldFocus?.(field.id)}
             style={[controlStyle(profile, state.valid), { fontSize: t.valueDp, color: t.text }]}
             keyboardType="numeric"
             defaultValue={String(value ?? '')}

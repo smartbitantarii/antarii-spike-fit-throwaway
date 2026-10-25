@@ -52,8 +52,11 @@ test('every step list names where the clock starts and stops', () => {
 
 test('🔴 the drivable set is recorded rather than discovered at a bench', () => {
   // S1 and S4 joined on 2026-10-23 when the worklist gave them somewhere to
-  // navigate between. S2, S5, S7 and S8 still cannot be performed faithfully.
-  assert.deepEqual(drivableSequences().sort(), ['S1', 'S3', 'S4', 'S5', 'S6']);
+  // navigate between; S5 on 2026-10-24 when the fixture was added; S2 the same
+  // day, once the widgets handed their inputs up by ref. S7 and S8 still cannot
+  // be performed faithfully — both need ADR-005 spike territory that does not
+  // exist.
+  assert.deepEqual(drivableSequences().sort(), ['S1', 'S2', 'S3', 'S4', 'S5', 'S6']);
 });
 
 test('S1 and S4 are NAVIGATIONS, which is why they needed a list and not a remount', () => {
@@ -77,9 +80,39 @@ test('every undrivable sequence says exactly what is missing, never a vague "not
 
 test('the blockers name a missing THING, not a missing intention', () => {
   // A reason like "not implemented" tells a reader nothing about what to do.
-  assert.match(SEQUENCES.S2.blockedBy!, /focus/);
   assert.match(SEQUENCES.S7.blockedBy!, /evaluator/);
   assert.match(SEQUENCES.S8.blockedBy!, /pricing resolver/);
+});
+
+test('S2 became drivable by handing the inputs up, and SAYS WHERE IT DEPARTS FROM M7', () => {
+  assert.equal(SEQUENCES.S2.drivable, true);
+  assert.equal(SEQUENCES.S2.blockedBy, undefined);
+
+  /**
+   * 🔴 THE POINT OF THIS TEST IS THE DEVIATION NOTE, NOT THE FLAG.
+   * `blockedBy` explains an ABSENT figure and is hard to forget, because the
+   * figure is missing. A deviation explains a figure that EXISTS but is not
+   * quite the one M7 described — which is far easier to lose, since everything
+   * looks complete. So the note is asserted to name the two facts a reader
+   * needs: how many moves M7 asked for, and why the count differs.
+   */
+  const d = SEQUENCES.S2.deviation;
+  assert.ok(d && d.length > 60, 'S2 deviates from M7 §3 and must say so');
+  assert.match(d!, /19 moves/, 'the deviation must name what M7 specified');
+  assert.match(d!, /TextInput/, 'the deviation must name why the count differs');
+  assert.match(d!, /SAME figure/, 'the deviation must say what it costs — which is nothing');
+});
+
+test('only a sequence that deviates carries a deviation note', () => {
+  for (const id of ALL) {
+    if (id === 'S2') continue;
+    assert.equal(
+      SEQUENCES[id].deviation,
+      undefined,
+      id + ' carries a deviation note; either it deviates and the Tracker does not say so, ' +
+        'or the note is stale',
+    );
+  }
 });
 
 test('S5 became drivable by adding an ASSET, not a feature', () => {

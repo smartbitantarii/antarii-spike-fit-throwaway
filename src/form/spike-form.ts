@@ -12,7 +12,8 @@
  * enumerated here, and spike-form.test.ts asserts the shape rather than
  * trusting it.
  */
-import type { FieldDef, FieldType, FormDef, RuleDef, SectionDef } from './model.ts';
+import { FOCUSABLE_FIELD_TYPES } from './model.ts';
+import type { FieldDef, FieldId, FieldType, FormDef, RuleDef, SectionDef } from './model.ts';
 
 export const DENSE_FIELD_COUNT = 20;
 
@@ -27,6 +28,37 @@ export const USED_TYPES: readonly FieldType[] = [
   'media',
   'check-item',
 ];
+
+/**
+ * The dense section's fields that can take focus, in the order they render —
+ * `S2`'s subjects. ➕ Derived from the form rather than listed, so changing
+ * `DENSE_FIELD_COUNT` or `USED_TYPES` moves `S2` with it instead of silently
+ * leaving it measuring the wrong fields.
+ */
+export function denseFocusOrder(f: FormDef = spikeForm): FieldId[] {
+  return f.fields
+    .filter((x) => x.section === 'dense' && FOCUSABLE_FIELD_TYPES.includes(x.type))
+    .map((x) => x.id);
+}
+
+/**
+ * The consecutive pairs `S2` times: `[from, to]`.
+ *
+ * ⚠ THE PAIRS ARE NOT ALL ADJACENT ON SCREEN, and that is recorded rather than
+ * smoothed over. With eight types cycling across twenty fields the focusable
+ * ones are `d1, d2, d9, d10, d17, d18`, so `d2 → d9` steps over six
+ * non-focusable controls — a real move a worker makes, and one that may have to
+ * scroll. *A figure that silently averaged a scroll with a neighbour-hop would
+ * hide the thing most likely to cost.*
+ */
+export function denseFocusTransitions(f: FormDef = spikeForm): Array<[FieldId, FieldId]> {
+  const order = denseFocusOrder(f);
+  const pairs: Array<[FieldId, FieldId]> = [];
+  for (let i = 0; i + 1 < order.length; i++) {
+    pairs.push([order[i]!, order[i + 1]!]);
+  }
+  return pairs;
+}
 
 const sections: SectionDef[] = [
   { id: 'dense', label: 'Inspection detail', collapsible: true },

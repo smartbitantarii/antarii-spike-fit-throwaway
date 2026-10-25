@@ -22,6 +22,41 @@ export type FieldType =
   | 'media'
   | 'check-item';
 
+/**
+ * 🔴 THE FIELD TYPES THAT CAN TAKE INPUT FOCUS — WHICH IS NOT ALL OF THEM,
+ * AND THAT IS WHAT MAKES `S2` A DEVIATION FROM ITS BRIEF.
+ *
+ * M7 §3's `S2` starts when *“focus leaves field k”* and stops when *“field k+1
+ * accepts input”*, and specifies **19 moves** across the dense section's twenty
+ * fields. ⚠ But the dense section deliberately cycles **eight** types, and only
+ * `text` and `number` render a `TextInput`. The other six render `Pressable`s,
+ * which have no input focus to move. *The form is not wrong — its mix was chosen
+ * because “twenty of one widget would measure the cheapest case and call it the
+ * density figure”. The brief and the form simply disagree about what a dense
+ * section contains.*
+ *
+ * ✕ THE ALTERNATIVES WERE REJECTED, EACH FOR A STATED REASON.
+ * `AccessibilityInfo.setAccessibilityFocus` moves the SCREEN-READER cursor, so
+ * timing it would measure TalkBack rather than the form · inventing an “active
+ * control” state of our own would measure our own invention · making the dense
+ * section twenty text boxes would make `S2` pass easily and destroy what the
+ * density condition is for.
+ *
+ * ➕ AND THE DEVIATION COSTS NOTHING IN THE FIGURE, WHICH IS WHY IT IS THE HONEST
+ * CHOICE RATHER THAN MERELY THE AVAILABLE ONE. §4b reduces an iteration by its
+ * **own p95**, and nearest-rank p95 over 19 samples is rank 19 — **the maximum**.
+ * So counting fourteen non-moves as instantaneous would yield **the same number**
+ * while claiming to have measured fourteen things it did not.
+ *
+ * *(**Decision — owner**, 2026-10-24: measure the real transitions, record the
+ * deviation.)*
+ *
+ * ⚠ This list and `widgets.tsx` carry the same fact and can drift, so a test
+ * reads the widget source rather than trusting a convention — the same treatment
+ * `build.test.ts` gives `app.json` and `build.ts`.
+ */
+export const FOCUSABLE_FIELD_TYPES: readonly FieldType[] = ['text', 'number'];
+
 export interface FieldDef {
   id: FieldId;
   type: FieldType;

@@ -22,6 +22,13 @@ export interface SequenceSpec {
   steps: string[];
   /** can this prototype perform it faithfully today? */
   drivable: boolean;
+  /**
+   * ➕ A DRIVABLE SEQUENCE THAT DOES NOT FOLLOW ITS BRIEF EXACTLY SAYS SO HERE.
+   * `blockedBy` explains why a figure is absent; this explains why a figure that
+   * EXISTS is not quite the one M7 described — a distinction worth keeping,
+   * because the second is far easier to forget than the first.
+   */
+  deviation?: string;
   /** when it cannot, exactly what is missing — never a vague "not yet" */
   blockedBy?: string;
 }
@@ -42,13 +49,17 @@ export const SEQUENCES: Readonly<Record<SeqId, SequenceSpec>> = Object.freeze({
     steps: [
       'Open the dense section — ~20 visible fields, the brief’s labelled density.',
       'Focus field 1.',
-      'For k = 1…19: mark start → move focus to field k+1 → on accepting input, mark stop.',
+      'For each focusable pair: mark start → move focus to the next → on accepting input, mark stop.',
+      'Reduce the pass by its own p95 (§4b) — one sample per iteration.',
       'Collapse the section. (reset)',
     ],
-    drivable: false,
-    blockedBy:
-      'the dense section renders but nothing manages focus programmatically, and S2 measures ' +
-      'focus latency. Timing a state update instead would measure the wrong thing.',
+    drivable: true,
+    deviation:
+      'M7 §3 specifies 19 moves across the dense section; only 6 of its 20 fields render a ' +
+      'TextInput, because the section deliberately cycles eight types. The 5 real transitions ' +
+      'are measured instead. §4b reduces a pass by its own p95, and nearest-rank p95 over 19 ' +
+      'is rank 19 — the maximum — so counting the 14 non-moves as instantaneous would give the ' +
+      'SAME figure while claiming to have measured them. (Decision — owner, 2026-10-24.)',
   },
   S3: {
     id: 'S3',

@@ -27,7 +27,7 @@ import type { Answers, FormDef } from './src/form/model.ts';
 import { SqlCipherStore } from './src/store/store.ts';
 import { Queue } from './src/queue/queue.ts';
 import { keystoreKeyProvider, openExpoDatabase } from './src/platform/expo-adapters.ts';
-import { spikeForm } from './src/form/spike-form.ts';
+import { spikeForm, denseFocusTransitions } from './src/form/spike-form.ts';
 import { makeWorklist, jobForIteration, DEFAULT_WORKLIST_VOLUME, type Job } from './src/form/worklist.ts';
 import { WorklistScreen } from './src/ui/worklist-screen.tsx';
 import { BUILD_ID } from './src/build.ts';
@@ -80,6 +80,26 @@ const context: RunContext = {
 
 /** The tenant default SwR-093 defaults to; the worker may switch from it. */
 const TENANT_DEFAULT_PROFILE: Profile = 'standard';
+
+/**
+ * 🔴 NEVER AWAIT A SIGNAL WITHOUT A DEADLINE.
+ *
+ * The first version awaited one with no timeout, and when the signal could not
+ * arrive — because the navigation was a no-op — the campaign hung silently on
+ * iteration 1. **A lost signal is indistinguishable from a slow device**, which
+ * is the same defect this project already hit with `fetch` having no default
+ * timeout; the lesson simply was not carried across.
+ *
+ * ➕ Ten seconds is far beyond any plausible navigation or focus change on the
+ * weakest device in hand, and far below the patience of someone watching a bar
+ * that is not moving.
+ *
+ * ⚠ AT MODULE SCOPE because `S2`'s `focusAndWait` uses it well above the point
+ * where it used to be declared. A closure reading a `const` declared later in
+ * the same body works — it is only called after that line runs — but relying on
+ * that is a trap for the next edit, and this constant is not per-render anyway.
+ */
+const NAV_TIMEOUT_MS = 10_000;
 
 export default function App(): React.JSX.Element {
   const form: FormDef = spikeForm;
@@ -413,6 +433,155 @@ export default function App(): React.JSX.Element {
     }
   }, [awaitSignal, runContext, signalThumbReady]);
 
+  /**
+   * `S2` — moving between fields in the dense section, target **300 ms**.
+   *
+   * 🔴 THE FIELDS ARE FOCUSED BY REF, WHICH IS THE WHOLE REASON `S2` WAS
+   * BLOCKED. M7 stops the clock when *“field k+1 accepts input”*, a property of
+   * the control, so the stop is the target's own `onFocus` — not a state update,
+   * which would time React rather than the platform.
+   *
+   * ⚠ ONE SAMPLE PER ITERATION, REDUCED BY §4b's RULE. `reduceIteration` takes
+   * the pass's own p95; letting every move through would redefine `n` from 100
+   * to several hundred and quietly change what §6a's sample means.
+   *
+   * ✕ It measures **5 transitions, not M7's 19** — see `FOCUSABLE_FIELD_TYPES`
+   * for why that is the honest reading and why it yields the same number.
+   */
+  const focusInputs = React.useRef<Record<string, TextInput | null>>({});
+  const registerInput = React.useCallback((id: string, input: TextInput | null) => {
+    focusInputs.current[id] = input;
+  }, []);
+  const awaitingFocus = React.useRef<null | { id: string; done: () => void }>(null);
+  const onFieldFocus = React.useCallback((id: string) => {
+    const w = awaitingFocus.current;
+    if (w && w.id === id) {
+      awaitingFocus.current = null;
+      w.done();
+    }
+  }, []);
+
+  /**
+   * Waits until a field's input IS or IS NOT registered.
+   *
+   * ⚠ M7 step 4 resets `S2` by **collapsing the section**, which unmounts all
+   * twenty widgets — so each iteration must wait for the re-mounted inputs
+   * before it can focus one. ✕ A FIXED SLEEP WOULD BE THE WRONG TOOL: too
+   * short and iteration 1 dies on a missing ref, too long and 101 iterations
+   * carry minutes of invented delay. Polling the registration itself is the
+   * thing actually being waited for.
+   *
+   * ➕ The deadline is the same one every other signal carries, for the same
+   * reason: a reset that silently never completes must not look like a slow
+   * device.
+   */
+  const awaitRegistration = React.useCallback(
+    async (id: string, present: boolean): Promise<void> => {
+      const until = Date.now() + NAV_TIMEOUT_MS;
+      for (;;) {
+        const got = focusInputs.current[id] != null;
+        if (got === present) return;
+        if (Date.now() > until) {
+          throw new Error(
+            'S2: ' + id + (present ? ' never registered' : ' never unregistered') +
+              ' within ' + NAV_TIMEOUT_MS + 'ms',
+          );
+        }
+        await new Promise<void>((r) => setTimeout(r, 8));
+      }
+    },
+    [],
+  );
+
+  const focusAndWait = React.useCallback(async (id: string): Promise<void> => {
+    const input = focusInputs.current[id];
+    if (!input) throw new Error('S2: no input registered for ' + id + ' — is the dense section open?');
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => {
+          awaitingFocus.current = null;
+          reject(new Error('S2: ' + id + ' did not report focus within ' + NAV_TIMEOUT_MS + 'ms'));
+        },
+        NAV_TIMEOUT_MS,
+      );
+      awaitingFocus.current = {
+        id,
+        done: () => {
+          clearTimeout(timer);
+          resolve();
+        },
+      };
+      input.focus();
+    });
+  }, []);
+
+  const runS2Campaign = React.useCallback(async () => {
+    setBusy(true);
+    setCampaign('starting S2\u2026');
+    try {
+      const pairs = denseFocusTransitions();
+      if (pairs.length === 0) throw new Error('S2: the dense section has no focusable pairs');
+
+      // The form must be mounted at all — the worklist screen returns early and
+      // renders no fields — and the section starts COLLAPSED, so iteration 1
+      // begins in the same state M7's reset leaves every other iteration in.
+      setScreen('form');
+      setOpenSection('');
+      await awaitRegistration(pairs[0]![0], false);
+
+      const fresh = new Harness(runContext, () => performance.now());
+
+      const result = await runCampaign(
+        fresh,
+        'S2',
+        async () => {
+          // M7 step 1: open the dense section — ~20 visible fields, the brief's
+          // labelled density. That density is the CONDITION the transitions are
+          // measured under, not part of what is timed.
+          setOpenSection('dense');
+          await awaitRegistration(pairs[0]![0], true);
+
+          // M7 step 2: focus field 1. ⚠ OUTSIDE the timing — it is the pass's
+          // starting position, not a move between fields.
+          await focusAndWait(pairs[0]![0]);
+
+          // M7 step 3: time each move.
+          const within: number[] = [];
+          for (const [, to] of pairs) {
+            const t0 = performance.now();
+            await focusAndWait(to);
+            within.push(performance.now() - t0);
+          }
+
+          // §4b: one sample per iteration, the pass reduced by its own p95.
+          fresh.reduceIteration('S2', within);
+
+          // M7 step 4 (reset): collapse the section, and WAIT for the unmount.
+          // ➕ Not skipped for convenience: leaving it open would let every
+          // iteration after the first run against an already-warm view
+          // hierarchy, which is a different measurement wearing the same name.
+          setOpenSection('');
+          await awaitRegistration(pairs[0]![0], false);
+        },
+        {
+          onProgress: (p) =>
+            setCampaign('S2 ' + p.iteration + '/' + p.total + (p.warmup ? ' (warm-up)' : '')),
+        },
+      );
+
+      setCampaignFigures([result.figure]);
+      setCampaign(
+        'S2 n=' + result.figure.n + ' p95=' + result.figure.p95Ms + 'ms target=' +
+          result.figure.targetMs + ' ' + (result.figure.pass ? 'PASS' : 'FAIL') +
+          ' (' + pairs.length + ' transitions/pass) \u2014 now Deliver',
+      );
+    } catch (err) {
+      setCampaign('S2 failed: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setBusy(false);
+    }
+  }, [awaitRegistration, focusAndWait, runContext]);
+
   const onDeliver = React.useCallback(async () => {
     setDelivery('working\u2026');
     try {
@@ -565,21 +734,6 @@ export default function App(): React.JSX.Element {
    */
   const screenRef = React.useRef<'list' | 'form'>('list');
   screenRef.current = screen;
-
-  /**
-   * 🔴 NEVER AWAIT A LAYOUT SIGNAL WITHOUT A DEADLINE.
-   *
-   * The first version awaited one with no timeout, and when the signal could
-   * not arrive — because the navigation was a no-op — the campaign hung
-   * silently on iteration 1. **A lost signal is indistinguishable from a slow
-   * device**, which is the same defect this project already hit with `fetch`
-   * having no default timeout; the lesson simply was not carried across.
-   *
-   * ➕ Ten seconds is far beyond any plausible navigation on the weakest
-   * device in hand and far below the patience of someone watching a bar that
-   * is not moving.
-   */
-  const NAV_TIMEOUT_MS = 10_000;
 
   const awaitSignal = React.useCallback(
     (slot: React.MutableRefObject<null | (() => void)>, what: string, trigger: () => void) =>
@@ -755,6 +909,14 @@ export default function App(): React.JSX.Element {
           <Text>{busy ? 'running\u2026' : 'Run campaign: S1 \u2014 opening a form'}</Text>
         </Pressable>
         <Pressable
+          onPress={() => { void runS2Campaign(); }}
+          disabled={busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>{busy ? 'running\u2026' : 'Run campaign: S2 \u2014 moving between fields'}</Text>
+        </Pressable>
+        <Pressable
           onPress={() => { void runS5Campaign(); }}
           disabled={busy}
           style={styles.capture}
@@ -774,7 +936,7 @@ export default function App(): React.JSX.Element {
         {/* ➕ Named here so the operator sees WHY the other six are absent. */}
         <Text style={styles.note}>
           {'not drivable yet: ' +
-            (['S2', 'S7', 'S8'] as const)
+            (['S7', 'S8'] as const)
               .map((s) => s + ' (' + (SEQUENCES[s].blockedBy ?? '').split(',')[0] + ')')
               .join('; ')}
         </Text>
@@ -886,6 +1048,8 @@ export default function App(): React.JSX.Element {
                     onFirstFieldLayout={
                       expanded && fieldIndex === 0 ? signalFormReady : undefined
                     }
+                    registerInput={registerInput}
+                    onFieldFocus={onFieldFocus}
                     field={f}
                     profile={profile}
                     state={state.state[f.id]!}
