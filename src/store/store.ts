@@ -221,16 +221,47 @@ export class SqlCipherStore implements EncryptedStore {
     }
   }
 
+  /**
+   * 🔴 THE GUARD HERE IS NOT PADDING, AND ITS ABSENCE COST 22 GB.
+   *
+   * The first version read `PRAGMA page_count` / `page_size` and returned
+   * `pages * size`, rejecting only a NON-FINITE result. **Zero is finite.** So
+   * when the pragma did not come back in the shape this code assumed, it
+   * returned **0** — and §3a's fill, whose loop runs *while the database is
+   * smaller than the target*, wrote batches for an hour and reached **22.30 GB
+   * against a 512 MiB target** before the operator stopped it.
+   *
+   * ⚠ The same lesson as three earlier defects in this project, and it was not
+   * carried across: *a lost signal is indistinguishable from a slow device* ·
+   * *a failed store open looked like a slow one* · *a truthy `localUri` is not
+   * a usable path*. **A measurement that can silently return “nothing” must say
+   * so, not return a number that happens to be small.**
+   *
+   * ➕ A keyless read as well as a keyed one: some drivers return a pragma's
+   * value in a column named after the pragma, others in the first column
+   * whatever it is called. *Reading both is cheaper than assuming either.*
+   */
   async sizeBytes(): Promise<number> {
     const db = this.require();
-    const [pc] = await db.getAllAsync('PRAGMA page_count', []);
-    const [ps] = await db.getAllAsync('PRAGMA page_size', []);
-    const pages = Number(pc?.page_count ?? 0);
-    const size = Number(ps?.page_size ?? 0);
-    if (!Number.isFinite(pages) || !Number.isFinite(size)) {
-      throw new Error('store: page_count/page_size did not return numbers');
+    const pages = await this.pragmaNumber('page_count');
+    const size = await this.pragmaNumber('page_size');
+    if (pages <= 0 || size <= 0) {
+      throw new Error(
+        'store: PRAGMA page_count/page_size returned ' + pages + '/' + size +
+          ' — the database size cannot be measured, so anything that fills ' +
+          'to a size target would never stop',
+      );
     }
     return pages * size;
+  }
+
+  private async pragmaNumber(name: string): Promise<number> {
+    const [row] = await this.require().getAllAsync('PRAGMA ' + name, []);
+    if (!row) return 0;
+    const direct = (row as Record<string, unknown>)[name];
+    const value = direct ?? Object.values(row)[0];
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
   }
 
   async counts(): Promise<{ jobs: number; answers: number; instances: number }> {

@@ -136,9 +136,26 @@ export async function buildFill(
   }
 
   // --- then the record side, to about a quarter of the budget.
+  /**
+   * 🔴 A CEILING AND A NO-PROGRESS CHECK, BOTH ADDED AFTER THIS LOOP WROTE
+   * 22.30 GB AGAINST A 512 MiB TARGET.
+   *
+   * `sizeBytes()` now refuses to return a meaningless measurement, which fixes
+   * the cause. **These two fix the SHAPE of the mistake**, which is that a loop
+   * bounded only by a measurement will run forever if the measurement is wrong
+   * — and the next wrong measurement will not be this one.
+   *
+   * ⚠ The ceiling is generous (three times the target) so it never fires on an
+   * honest fill; it exists to bound a dishonest one. The no-progress check is
+   * the sharper of the two: a batch that does not move the number means the
+   * number is not measuring the thing being written.
+   */
+  const CEILING_BYTES = RECORD_TARGET_BYTES * 3;
+  let batches = 0;
   let instance = state.instances;
   let answers = state.answers;
   while (state.recordBytes < RECORD_TARGET_BYTES && !shouldStop()) {
+    const before = state.recordBytes;
     const rows: Array<{ record: string; field: string; value: string }> = [];
     for (let i = 0; i < INSTANCES_PER_BATCH; i++) {
       const record = 'fill-instance-' + instance;
@@ -151,6 +168,24 @@ export async function buildFill(
     answers += rows.length;
     // ⚠ Size from a header read, counts carried forward — see `measureSizeOnly`.
     state = await measureSizeOnly(store, { jobs: state.jobs, instances: instance, answers });
+    batches += 1;
+
+    if (state.recordBytes <= before) {
+      throw new Error(
+        'the fill wrote ' + rows.length + ' rows and the database did not grow (' +
+          before + ' → ' + state.recordBytes + ' bytes). The size measurement is not ' +
+          'tracking what is being written, so the fill is stopping rather than ' +
+          'writing until the device is full.',
+      );
+    }
+    if (state.recordBytes > CEILING_BYTES) {
+      throw new Error(
+        'the fill passed ' + CEILING_BYTES + ' bytes against a ' + RECORD_TARGET_BYTES +
+          ' byte target after ' + batches + ' batches — stopping, because a fill ' +
+          'that overshoots this far is not measuring itself correctly.',
+      );
+    }
+
     onProgress({ phase: 'records', state });
     await yieldToUi();
   }
@@ -177,7 +212,10 @@ export async function buildFill(
 
     const dir = fillMediaDir();
     let n = state.mediaFiles;
-    while (state.mediaBytes < MEDIA_TARGET_BYTES && !shouldStop()) {
+    // The same ceiling, for the same reason: the media side counts rather than
+    // measures between checks, and a count that is wrong is no safer.
+    const MEDIA_CEILING = MEDIA_TARGET_BYTES * 3;
+    while (state.mediaBytes < MEDIA_TARGET_BYTES && state.mediaBytes < MEDIA_CEILING && !shouldStop()) {
       const out = new File(dir, FILL_PREFIX + n + '.jpg');
       if (out.exists) out.delete();
       out.create();
