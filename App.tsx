@@ -515,9 +515,9 @@ export default function App(): React.JSX.Element {
     });
   }, []);
 
-  const runS2Campaign = React.useCallback(async () => {
+  const runS2Campaign = React.useCallback(async (blurBeforeCollapse: boolean) => {
     setBusy(true);
-    setCampaign('starting S2\u2026');
+    setCampaign('starting S2' + (blurBeforeCollapse ? ' (blur first)' : '') + '\u2026');
     try {
       const pairs = denseFocusTransitions();
       if (pairs.length === 0) throw new Error('S2: the dense section has no focusable pairs');
@@ -556,10 +556,32 @@ export default function App(): React.JSX.Element {
           // §4b: one sample per iteration, the pass reduced by its own p95.
           fresh.reduceIteration('S2', within);
 
-          // M7 step 4 (reset): collapse the section, and WAIT for the unmount.
-          // ➕ Not skipped for convenience: leaving it open would let every
-          // iteration after the first run against an already-warm view
-          // hierarchy, which is a different measurement wearing the same name.
+          /**
+           * 🔴 THE ONE VARIABLE THIS BUILD EXISTS TO TEST.
+           *
+           * `S2` is the only sequence that UNMOUNTS A TEXTINPUT WHILE IT STILL
+           * HOLDS FOCUS — M7 step 4 collapses the section immediately after the
+           * last focus move. Across two campaigns in one process the cost per
+           * move went **29 → 316 ms**, continuously across the campaign
+           * boundary, with the slope rising **+0.764 → +2.297 ms/iteration** as
+           * accumulated moves went ~300 → ~900 — both factors of three.
+           * ⚠ **A slope proportional to the work already done is quadratic
+           * growth**, which is what a collection gaining one item per focus and
+           * being walked on every focus would produce.
+           *
+           * ➕ Blurring first is the single controlled change that would stop a
+           * focused view being torn down. **It is offered as a VARIANT rather
+           * than applied**, so the two can be compared on one build — if the
+           * trend survives the blur, the hypothesis is dead and nothing has
+           * been quietly “fixed” underneath the measurement.
+           *
+           * ✕ And note it is not a free fix even if it works: the application
+           * will unmount focused inputs in ordinary use, whenever a worker
+           * collapses a section mid-edit.
+           */
+          if (blurBeforeCollapse) {
+            focusInputs.current[pairs[pairs.length - 1]![1]]?.blur();
+          }
           setOpenSection('');
           await awaitRegistration(pairs[0]![0], false);
         },
@@ -578,9 +600,22 @@ export default function App(): React.JSX.Element {
     } catch (err) {
       setCampaign('S2 failed: ' + (err instanceof Error ? err.message : String(err)));
     } finally {
+      /**
+       * 🔴 LEAVE THE APPLICATION USABLE. `S2`'s reset ends with the dense
+       * section COLLAPSED, and on 2026-10-25 that booby-trapped the next
+       * sequence: `S1` navigated to a form with no fields rendered, so nothing
+       * reported layout and it died on its warm-up after ten seconds.
+       *
+       * ⚠ A campaign's per-iteration reset is not the same thing as leaving
+       * the app as it was found, and conflating them cost a whole experiment.
+       * ➕ In the `finally`, so a FAILED campaign cleans up too — that is
+       * exactly the case that bit, since the failure is what leaves the odd
+       * state behind.
+       */
+      setOpenSection(form.sections[0]!.id);
       setBusy(false);
     }
-  }, [awaitRegistration, focusAndWait, runContext]);
+  }, [awaitRegistration, focusAndWait, form, runContext]);
 
   const onDeliver = React.useCallback(async () => {
     setDelivery('working\u2026');
@@ -740,10 +775,26 @@ export default function App(): React.JSX.Element {
       new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => {
           slot.current = null;
+          /**
+           * 🔴 STATE WHAT WAS OBSERVED; DO NOT GUESS WHY.
+           *
+           * This message used to read *“the navigation probably did not happen
+           * — a screen does not re-layout when it is already showing”*, which
+           * names the one cause the author knew about. On 2026-10-25 it fired
+           * for a DIFFERENT cause — `S2` had left the dense section collapsed,
+           * so the form rendered no fields and nothing could report layout —
+           * and the confident wrong guess sent the reader at the navigation.
+           *
+           * ⚠ A diagnostic that asserts a cause is worse than one that reports
+           * a fact, because it is believed exactly when the reader has least
+           * information of their own.
+           */
           reject(
             new Error(
-              'no ' + what + ' signal within ' + NAV_TIMEOUT_MS + 'ms. The navigation probably ' +
-                'did not happen — a screen does not re-layout when it is already showing.',
+              'no ' + what + ' signal within ' + NAV_TIMEOUT_MS + 'ms. The trigger ran and no ' +
+                'layout followed. Known causes: the screen was already showing, so nothing ' +
+                're-laid out; or nothing is rendered that reports this signal — for the form, ' +
+                'that means no section is expanded.',
             ),
           );
         }, NAV_TIMEOUT_MS);
@@ -909,12 +960,22 @@ export default function App(): React.JSX.Element {
           <Text>{busy ? 'running\u2026' : 'Run campaign: S1 \u2014 opening a form'}</Text>
         </Pressable>
         <Pressable
-          onPress={() => { void runS2Campaign(); }}
+          onPress={() => { void runS2Campaign(false); }}
           disabled={busy}
           style={styles.capture}
           accessibilityRole="button"
         >
           <Text>{busy ? 'running\u2026' : 'Run campaign: S2 \u2014 moving between fields'}</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => { void runS2Campaign(true); }}
+          disabled={busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>
+            {busy ? 'running\u2026' : 'Run campaign: S2 \u2014 VARIANT: blur before collapsing'}
+          </Text>
         </Pressable>
         <Pressable
           onPress={() => { void runS5Campaign(); }}
