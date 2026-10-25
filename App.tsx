@@ -112,7 +112,34 @@ const NAV_TIMEOUT_MS = 10_000;
  * control, and deleting it would make the next reader wonder whether anyone
  * had tried it.
  */
-type S2Variant = 'plain' | 'blur-before-collapse' | 'no-input-services';
+type S2Variant = 'plain' | 'blur-before-collapse' | 'no-input-services' | 'no-collapse';
+
+/**
+ * What each variant means, carried INTO THE RECORD so a delivered figure
+ * explains itself rather than relying on whoever pressed the button.
+ *
+ * ✕ `no-collapse` IS A DIAGNOSTIC, NOT A FIGURE. It omits M7 step 4's reset
+ * entirely, so it must never be read as `S2`'s measurement — which is exactly
+ * why the note saying so travels in the payload rather than in a message to
+ * the owner.
+ */
+const S2_VARIANT_NOTE: Readonly<Record<S2Variant, string>> = Object.freeze({
+  plain:
+    'M7 §3 as written, within the recorded deviation: 5 focusable transitions per pass, ' +
+    'the section collapsed and re-expanded between iterations (step 4).',
+  'blur-before-collapse':
+    'DIAGNOSTIC. As plain, but the focused input is blurred before the collapse, to test ' +
+    'whether tearing down a focused view is what accumulates. It is not: +2.276 ms/iteration ' +
+    'against the control\u2019s +2.297.',
+  'no-input-services':
+    'DIAGNOSTIC. As plain, but importantForAutofill="no", autoComplete="off" and ' +
+    'spellCheck={false} are set BEFORE the inputs mount, to test Android\u2019s autofill and ' +
+    'spell-check sessions. They are not it: +2.492 ms/iteration, unchanged.',
+  'no-collapse':
+    'DIAGNOSTIC, NOT A FIGURE — it omits M7 step 4\u2019s reset. The section is opened once and ' +
+    'left open, so the five focus moves happen without the per-iteration remount. It exists ' +
+    'to separate focus-alone from focus-plus-remount, which no run so far has done.',
+});
 
 export default function App(): React.JSX.Element {
   const form: FormDef = spikeForm;
@@ -529,9 +556,18 @@ export default function App(): React.JSX.Element {
   }, []);
 
   const [quietInputs, setQuietInputs] = React.useState(false);
+  /**
+   * ⚠ Held in a ref, not state, because `onDeliver` reads it when the operator
+   * presses Deliver — possibly several renders after the campaign ended — and a
+   * stale closure here would stamp the WRONG variant onto a record, which is
+   * worse than stamping none.
+   */
+  const lastVariant = React.useRef<{ name: string; note: string } | null>(null);
 
   const runS2Campaign = React.useCallback(async (variant: S2Variant) => {
     const blurBeforeCollapse = variant === 'blur-before-collapse';
+    // ✕ The ONE variant that does not perform M7 step 4, and the reason it exists.
+    const collapses = variant !== 'no-collapse';
     setBusy(true);
     setCampaign('starting S2' + (variant === 'plain' ? '' : ' [' + variant + ']') + '\u2026');
     try {
@@ -543,6 +579,7 @@ export default function App(): React.JSX.Element {
        * every input this run uses is mounted after this line.
        */
       setQuietInputs(variant === 'no-input-services');
+      lastVariant.current = { name: variant, note: S2_VARIANT_NOTE[variant] };
       const pairs = denseFocusTransitions();
       if (pairs.length === 0) throw new Error('S2: the dense section has no focusable pairs');
 
@@ -550,8 +587,15 @@ export default function App(): React.JSX.Element {
       // renders no fields — and the section starts COLLAPSED, so iteration 1
       // begins in the same state M7's reset leaves every other iteration in.
       setScreen('form');
-      setOpenSection('');
-      await awaitRegistration(pairs[0]![0], false);
+      if (collapses) {
+        // Start collapsed, so iteration 1 begins in the state M7's reset leaves
+        // every other iteration in.
+        setOpenSection('');
+        await awaitRegistration(pairs[0]![0], false);
+      } else {
+        setOpenSection('dense');
+        await awaitRegistration(pairs[0]![0], true);
+      }
 
       const fresh = new Harness(runContext, () => performance.now());
 
@@ -562,8 +606,10 @@ export default function App(): React.JSX.Element {
           // M7 step 1: open the dense section — ~20 visible fields, the brief's
           // labelled density. That density is the CONDITION the transitions are
           // measured under, not part of what is timed.
-          setOpenSection('dense');
-          await awaitRegistration(pairs[0]![0], true);
+          if (collapses) {
+            setOpenSection('dense');
+            await awaitRegistration(pairs[0]![0], true);
+          }
 
           // M7 step 2: focus field 1. ⚠ OUTSIDE the timing — it is the pass's
           // starting position, not a move between fields.
@@ -603,11 +649,13 @@ export default function App(): React.JSX.Element {
            * will unmount focused inputs in ordinary use, whenever a worker
            * collapses a section mid-edit.
            */
-          if (blurBeforeCollapse) {
-            focusInputs.current[pairs[pairs.length - 1]![1]]?.blur();
+          if (collapses) {
+            if (blurBeforeCollapse) {
+              focusInputs.current[pairs[pairs.length - 1]![1]]?.blur();
+            }
+            setOpenSection('');
+            await awaitRegistration(pairs[0]![0], false);
           }
-          setOpenSection('');
-          await awaitRegistration(pairs[0]![0], false);
         },
         {
           onProgress: (p) =>
@@ -689,6 +737,8 @@ export default function App(): React.JSX.Element {
         isCampaign ? stepsForRecord(campaignFigures!.map((f) => f.seq)) : {},
         coldStartMs,
         LOCATION_DEADLINE_MS,
+        // Only an S2 figure carries one; every other sequence has no variants.
+        isCampaign && campaignFigures!.some((f) => f.seq === 'S2') ? lastVariant.current : null,
       );
       const json = stableJson(payload);
 
@@ -1010,6 +1060,16 @@ export default function App(): React.JSX.Element {
         >
           <Text>
             {busy ? 'running\u2026' : 'Run campaign: S2 \u2014 VARIANT: no autofill / spell-check'}
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={() => { void runS2Campaign('no-collapse'); }}
+          disabled={busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>
+            {busy ? 'running\u2026' : 'Run campaign: S2 \u2014 VARIANT: no collapse (diagnostic)'}
           </Text>
         </Pressable>
         <Pressable

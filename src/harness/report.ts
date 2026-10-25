@@ -369,6 +369,23 @@ export interface DevicePayload {
    * written down makes the figure un-rereadable.*
    */
   locationDeadlineMs: number | null;
+  /**
+   * 🔴 WHICH VARIANT PRODUCED THIS FIGURE — A RUN CONDITION THAT WAS VISIBLE
+   * ONLY ON A SCREEN UNTIL NOW.
+   *
+   * `S2` has been run plain, with a blur before the collapse, with Android's
+   * input services suppressed, and without the collapse at all. ⚠ **Every one
+   * of those records was identical in the data** — same `seq`, same `device`,
+   * same `fill` — and they were told apart by their timestamps and by the
+   * author's memory of the order they were run in. *That is not evidence; it
+   * is recollection standing next to evidence.*
+   *
+   * ➕ The same lesson as `locationDeadlineMs`, and before that the refresh
+   * rate behind `S6 − S3`: **a condition that shapes a figure and is not
+   * written down makes the figure un-rereadable.** The note travels with it so
+   * the record explains itself, as `kindNote` does.
+   */
+  variant: { name: string; note: string } | null;
 }
 
 const KIND_NOTE: Readonly<Record<DevicePayloadKind, string>> = Object.freeze({
@@ -387,6 +404,7 @@ export function devicePayload(
   steps: Record<string, string[]> = {},
   coldStartMs: number | null = null,
   locationDeadlineMs: number | null = null,
+  variant: { name: string; note: string } | null = null,
 ): DevicePayload {
   return {
     kind,
@@ -400,5 +418,6 @@ export function devicePayload(
     figures,
     coldStartMs,
     locationDeadlineMs,
+    variant,
   };
 }
