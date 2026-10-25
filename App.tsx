@@ -1084,7 +1084,28 @@ const styles = StyleSheet.create({
   // which is what makes `presentation.test.ts` evidence about what renders.
   thumbZone: { padding: 12 },
   collectorBar: { paddingHorizontal: 12, paddingTop: 8 },
+  /**
+   * 🔴 THE COLOURS ARE EXPLICIT BECAUSE THE DEFAULTS ARE NOT OURS.
+   *
+   * These three operator fields used to set neither `color` nor
+   * `backgroundColor`, so they rendered as TRANSPARENT boxes carrying whatever
+   * text colour the platform chose — and on a device showing the system dark
+   * theme that came out dark-on-dark and unreadable. ⚠ **Typing mistakes in
+   * these fields are not cosmetic**: they are the `§6d` run conditions. An
+   * unreadable device label is how a record came back saying `Galaxy M35 5G`,
+   * and an unreadable fill is how one came back saying `wmpty`.
+   *
+   * ➕ The values are `profile.ts`'s own `STANDARD` tokens — `#1a1a1a` on
+   * `#ffffff` — rather than a fresh pair, so the operator bar matches the form
+   * controls above it, which have always set both and have always been legible.
+   * *They are written literally rather than imported because this bar is the
+   * harness's own furniture, not a `SwR-084` widget; `presentation.test.ts` is
+   * evidence about what the FORM renders, and borrowing its tokens here would
+   * quietly widen what that test appears to cover.*
+   */
   collectorInput: {
+    color: '#1a1a1a',
+    backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#595959',
     borderRadius: 4,
