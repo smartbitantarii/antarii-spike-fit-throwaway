@@ -386,6 +386,34 @@ export interface DevicePayload {
    * the record explains itself, as `kindNote` does.
    */
   variant: { name: string; note: string } | null;
+  /**
+   * 🔴 §3a's FILL, MEASURED — WHICH §3a REQUIRES: *“the split is recorded with
+   * the figures”*. The brief is explicit about why it has to be the split and
+   * not a total: *“a store full of media and a store full of records cost
+   * different amounts for exactly the form-open and list-open figures
+   * condition 1 measures”*.
+   *
+   * ⚠ IT SITS BESIDE THE OPERATOR'S TYPED `fill`, NOT INSTEAD OF IT. The typed
+   * field is §6d's *“the state held throughout”* in the operator's own words;
+   * this one is the device's. **Where they disagree, this is the evidence** —
+   * on 2026-10-24 a record went out reading *“none - wmpty store”*, and a
+   * free-text condition that records cannot be grouped by is barely a recorded
+   * condition at all.
+   */
+  fillState: FillStateRecord | null;
+}
+
+/** Mirrors `src/store/fill.ts`'s `FillState`, so `report.ts` imports no store code. */
+export interface FillStateRecord {
+  recordBytes: number;
+  mediaBytes: number;
+  totalBytes: number;
+  jobs: number;
+  instances: number;
+  answers: number;
+  mediaFiles: number;
+  complete: boolean;
+  unconfirmedOnly: boolean;
 }
 
 const KIND_NOTE: Readonly<Record<DevicePayloadKind, string>> = Object.freeze({
@@ -405,6 +433,7 @@ export function devicePayload(
   coldStartMs: number | null = null,
   locationDeadlineMs: number | null = null,
   variant: { name: string; note: string } | null = null,
+  fillStateRecord: FillStateRecord | null = null,
 ): DevicePayload {
   return {
     kind,
@@ -419,5 +448,6 @@ export function devicePayload(
     coldStartMs,
     locationDeadlineMs,
     variant,
+    fillState: fillStateRecord,
   };
 }

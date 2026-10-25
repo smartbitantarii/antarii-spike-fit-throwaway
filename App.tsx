@@ -25,6 +25,8 @@ import { Harness, type Figure, type RunContext } from './src/harness/harness.ts'
 import { evaluate, plan } from './src/form/evaluate.ts';
 import type { Answers, FormDef } from './src/form/model.ts';
 import { SqlCipherStore } from './src/store/store.ts';
+import { buildFill, clearFill, measureFill } from './src/platform/expo-fill.ts';
+import { describeFill, fillState, type FillState } from './src/store/fill.ts';
 import { Queue } from './src/queue/queue.ts';
 import { keystoreKeyProvider, openExpoDatabase } from './src/platform/expo-adapters.ts';
 import { spikeForm, denseFocusTransitions } from './src/form/spike-form.ts';
@@ -690,6 +692,96 @@ export default function App(): React.JSX.Element {
     }
   }, [awaitRegistration, focusAndWait, form, runContext]);
 
+  React.useEffect(() => {
+    if (screen !== 'list' || !ready) return;
+    let live = true;
+    setJobs(null);
+    void store
+      .listJobs()
+      .then((rows) => {
+        if (live) setJobs(rows);
+      })
+      .catch((err) => {
+        // ⚠ A failed read must not look like a slow one — the same defect that
+        // hid a failed store open behind a splash screen.
+        if (live) setCampaign('worklist read failed: ' + (err instanceof Error ? err.message : String(err)));
+      });
+    return () => {
+      live = false;
+    };
+  }, [screen, ready, store]);
+
+  /**
+   * §3a's worklist is the FIRST thing the fill writes — but `S1` and `S4` must
+   * work before anyone builds a 1.6 GiB fill, so the table is seeded on first
+   * open with the same generated rows.
+   *
+   * ➕ Seeded only when it is EMPTY. Re-seeding every launch would rewrite 200
+   * rows each time and, worse, would mask a fill that had failed to write them.
+   */
+  React.useEffect(() => {
+    if (!ready) return;
+    let live = true;
+    void (async () => {
+      try {
+        const counts = await store.counts();
+        if (live && counts.jobs === 0) await store.putJobs(worklist);
+        if (live) setFillState(await measureFill(store));
+      } catch (err) {
+        if (live) {
+          setCampaign('seeding the worklist failed: ' + (err instanceof Error ? err.message : String(err)));
+        }
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [ready, store, worklist]);
+
+  const refreshFill = React.useCallback(async () => {
+    setFillState(await measureFill(store));
+  }, [store]);
+
+  const onBuildFill = React.useCallback(async () => {
+    setFillBusy(true);
+    stopFill.current = false;
+    try {
+      const mb = (n: number) => (n / (1024 * 1024)).toFixed(0);
+      const final = await buildFill(
+        store,
+        worklist,
+        (p) => {
+          setFillState(p.state);
+          setCampaign(
+            'fill [' + p.phase + '] records ' + mb(p.state.recordBytes) + ' MiB + media ' +
+              mb(p.state.mediaBytes) + ' MiB = ' + mb(p.state.totalBytes) + ' MiB',
+          );
+        },
+        () => stopFill.current,
+      );
+      setFillState(final);
+      setCampaign(describeFill(final));
+    } catch (err) {
+      setCampaign('fill failed: ' + (err instanceof Error ? err.message : String(err)));
+      await refreshFill();
+    } finally {
+      setFillBusy(false);
+    }
+  }, [refreshFill, store, worklist]);
+
+  const onClearFill = React.useCallback(async () => {
+    setFillBusy(true);
+    try {
+      setCampaign('clearing the fill (VACUUM can take a while)\u2026');
+      setFillState(await clearFill(store));
+      setCampaign('fill cleared');
+    } catch (err) {
+      setCampaign('clear failed: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setFillBusy(false);
+    }
+  }, [store]);
+
   const onDeliver = React.useCallback(async () => {
     setDelivery('working\u2026');
     try {
@@ -739,6 +831,7 @@ export default function App(): React.JSX.Element {
         LOCATION_DEADLINE_MS,
         // Only an S2 figure carries one; every other sequence has no variants.
         isCampaign && campaignFigures!.some((f) => f.seq === 'S2') ? lastVariant.current : null,
+        fillMeasured,
       );
       const json = stableJson(payload);
 
@@ -823,7 +916,40 @@ export default function App(): React.JSX.Element {
    */
   const [screen, setScreen] = React.useState<'list' | 'form'>('list');
   const [job, setJob] = React.useState<Job | null>(null);
+  /**
+   * The GENERATED worklist — §3a's seed and `S1`'s job labels, not `S4`'s data.
+   * ➕ Kept because the fill needs rows to write and `S1` needs a job to put in
+   * the form header, neither of which is a store read.
+   */
   const worklist = React.useMemo(() => makeWorklist(DEFAULT_WORKLIST_VOLUME), []);
+
+  /**
+   * 🔴 `S4`'s DATA, READ FROM THE STORE — WHICH IT WAS NOT UNTIL NOW.
+   *
+   * The list used to render the memoised `worklist` above: **pure computation,
+   * never touching the store**. So *“opening the job list”* read nothing, and
+   * §3a's fill could not have moved `S4`'s figure **by construction** — it
+   * would have returned ~30 ms whatever the device held. *The product's
+   * worklist comes from the device store; a render over an in-memory array was
+   * measuring the wrong thing.*
+   *
+   * ⚠ `null` MEANS “NOT LOADED YET”, and it matters: the list renders nothing
+   * until the query returns, so `S4`'s stop — the first screenful laid out —
+   * cannot fire over stale rows from the previous navigation. *Without that,
+   * the second iteration onwards would measure a cached render.*
+   *
+   * ✕ It re-queries on EVERY open rather than caching. A real client might
+   * cache and refresh — `SwR-096` requires the list to state *“when it was last
+   * refreshed”*, which implies as much — but caching is an optimisation nobody
+   * has decided, and measuring the uncached cost is the honest default.
+   */
+  const [jobs, setJobs] = React.useState<Job[] | null>(null);
+
+  const [fillMeasured, setFillState] = React.useState<FillState>(() =>
+    fillState({ recordBytes: 0, mediaBytes: 0, jobs: 0, instances: 0, answers: 0, mediaFiles: 0 }),
+  );
+  const [fillBusy, setFillBusy] = React.useState(false);
+  const stopFill = React.useRef(false);
 
   /**
    * ⚠ THE RESOLVER IS ARMED BEFORE THE NAVIGATION IS TRIGGERED, never
@@ -984,6 +1110,44 @@ export default function App(): React.JSX.Element {
         it easy to hit by accident during a measured sequence.
       */}
       <View style={styles.collectorBar}>
+        {/*
+          🔴 §3a's FILL, AND THE STATE IT REPORTS IS MEASURED, NOT TYPED.
+          Every figure to date was taken at `fill: none`, where §6a wants the
+          §3a fill THROUGHOUT — so none of the five is a condition-1 figure
+          yet, whatever its margin.
+        */}
+        <Text style={styles.note}>{describeFill(fillMeasured)}</Text>
+        <Pressable
+          onPress={() => { void onBuildFill(); }}
+          disabled={fillBusy || busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>
+            {fillBusy ? 'building the fill\u2026' : 'Build the \u00a73a fill (1.6 GiB \u2014 takes a long time)'}
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={() => { stopFill.current = true; }}
+          disabled={!fillBusy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          {/*
+            ⚠ Stops BETWEEN batches, so it never leaves half an instance. The
+            build resumes from wherever it stopped, because it measures rather
+            than counts.
+          */}
+          <Text>{'Stop building (resumable)'}</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => { void onClearFill(); }}
+          disabled={fillBusy || busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>{'Clear the fill (VACUUMs \u2014 also slow)'}</Text>
+        </Pressable>
         <Text style={styles.note}>device label (§6d: the actual handset) — restart to apply</Text>
         <TextInput
           style={styles.collectorInput}
@@ -1164,7 +1328,7 @@ export default function App(): React.JSX.Element {
     return (
       <View style={styles.screen}>
         <WorklistScreen
-          jobs={worklist}
+          jobs={jobs ?? []}
           profile={profile}
           onFirstScreenful={signalListReady}
           onOpenJob={(j) => {
