@@ -19,6 +19,8 @@ import {
   Image,
   StyleSheet,
   useWindowDimensions,
+  Platform,
+  StatusBar,
 } from 'react-native';
 
 import { Harness, type Figure, type RunContext } from './src/harness/harness.ts';
@@ -1092,8 +1094,27 @@ export default function App(): React.JSX.Element {
    * would mean starting a run required navigating away from the screen
    * `S1` and `S4` start from.
    */
+  /**
+   * 🔴 THE CONTROLS SCROLL, AND THEY DID NOT UNTIL 2026-10-25.
+   *
+   * They were a fragment placed after a `flex: 1` sibling on both screens.
+   * That works while they fit; **once they do not, the overflow is simply
+   * clipped and there is no way to reach it**. By the time §3a's fill added a
+   * status line and three buttons — beside four `S2` variants — **Deliver had
+   * gone off the bottom of the screen, so a figure that had already been
+   * measured could not be delivered.**
+   *
+   * ⚠ A measuring apparatus whose RESULT cannot be retrieved is worse than one
+   * that fails outright: the campaign still runs, still reports its p95 on
+   * screen, and the record is simply lost.
+   *
+   * ➕ `maxHeight` rather than `flex: 1`, so the pane never takes the whole
+   * screen and the worklist or form underneath stays visible — `S1` and `S4`
+   * navigate between those, and a control pane covering them would change what
+   * is being measured.
+   */
   const controls = (
-    <>
+    <ScrollView style={styles.controlsPane}>
       {/*
         SyR-221: "On a phone, the actions used most often during capture shall be
         reachable by the thumb of the hand holding it, in every profile." The
@@ -1316,7 +1337,7 @@ export default function App(): React.JSX.Element {
         ) : null}
         <ProfileSwitch profile={profile} onSwitch={onSwitchProfile} />
       </View>
-    </>
+    </ScrollView>
   );
 
   /**
@@ -1343,7 +1364,7 @@ export default function App(): React.JSX.Element {
 
   return (
     <View style={styles.screen}>
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <ScrollView style={styles.pane} contentContainerStyle={styles.content}>
       <Pressable onPress={() => setScreen('list')} accessibilityRole="button">
         <Text style={styles.sectionLabel}>
           {'\u2039 worklist' + (job ? '  \u00b7  ' + job.reference + ' \u00b7 ' + job.customer : '')}
@@ -1394,7 +1415,17 @@ export default function App(): React.JSX.Element {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1 },
+  /**
+   * ⚠ `paddingTop` for the status bar. Without it the first line of the
+   * controls renders UNDER the clock and battery — which on 2026-10-25 hid the
+   * fill's own status line, the one thing that says whether the device is in
+   * the state §6a requires.
+   */
+  screen: { flex: 1, paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 0 },
+  /** Bounded, so the screen underneath stays visible and reachable. */
+  controlsPane: { maxHeight: '55%' },
+  /** Inside a screen that already pads for the status bar; padding twice would gap. */
+  pane: { flex: 1 },
   content: { padding: 16 },
   status: { padding: 24 },
   section: { marginBottom: 12 },
