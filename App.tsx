@@ -101,6 +101,19 @@ const TENANT_DEFAULT_PROFILE: Profile = 'standard';
  */
 const NAV_TIMEOUT_MS = 10_000;
 
+/**
+ * `S2`'s variants. ➕ NAMED RATHER THAN BOOLEAN because there are now three and
+ * a pair of flags would admit combinations nobody has run — and the variant
+ * NAME travels into the figure's own line on screen, so a delivered record can
+ * never be mistaken for a different one.
+ *
+ * ✕ `blur-before-collapse` is KEPT THOUGH IT IS ANSWERED — it changed nothing
+ * (slope +2.276 against the control's +2.297). A disproved control is still a
+ * control, and deleting it would make the next reader wonder whether anyone
+ * had tried it.
+ */
+type S2Variant = 'plain' | 'blur-before-collapse' | 'no-input-services';
+
 export default function App(): React.JSX.Element {
   const form: FormDef = spikeForm;
   // The real width, so SwR-084's fallback is decided by the device rather than
@@ -515,10 +528,21 @@ export default function App(): React.JSX.Element {
     });
   }, []);
 
-  const runS2Campaign = React.useCallback(async (blurBeforeCollapse: boolean) => {
+  const [quietInputs, setQuietInputs] = React.useState(false);
+
+  const runS2Campaign = React.useCallback(async (variant: S2Variant) => {
+    const blurBeforeCollapse = variant === 'blur-before-collapse';
     setBusy(true);
-    setCampaign('starting S2' + (blurBeforeCollapse ? ' (blur first)' : '') + '\u2026');
+    setCampaign('starting S2' + (variant === 'plain' ? '' : ' [' + variant + ']') + '\u2026');
     try {
+      /**
+       * ⚠ Set BEFORE the first expand, so the inputs mount with the props in
+       * force. `importantForAutofill` is read by the platform when the view is
+       * created, so toggling it on a mounted input would prove nothing.
+       * The campaign's setup collapses the section first, which guarantees
+       * every input this run uses is mounted after this line.
+       */
+      setQuietInputs(variant === 'no-input-services');
       const pairs = denseFocusTransitions();
       if (pairs.length === 0) throw new Error('S2: the dense section has no focusable pairs');
 
@@ -593,8 +617,8 @@ export default function App(): React.JSX.Element {
 
       setCampaignFigures([result.figure]);
       setCampaign(
-        'S2 n=' + result.figure.n + ' p95=' + result.figure.p95Ms + 'ms target=' +
-          result.figure.targetMs + ' ' + (result.figure.pass ? 'PASS' : 'FAIL') +
+        'S2 [' + variant + '] n=' + result.figure.n + ' p95=' + result.figure.p95Ms +
+          'ms target=' + result.figure.targetMs + ' ' + (result.figure.pass ? 'PASS' : 'FAIL') +
           ' (' + pairs.length + ' transitions/pass) \u2014 now Deliver',
       );
     } catch (err) {
@@ -613,6 +637,7 @@ export default function App(): React.JSX.Element {
        * state behind.
        */
       setOpenSection(form.sections[0]!.id);
+      setQuietInputs(false);
       setBusy(false);
     }
   }, [awaitRegistration, focusAndWait, form, runContext]);
@@ -960,7 +985,7 @@ export default function App(): React.JSX.Element {
           <Text>{busy ? 'running\u2026' : 'Run campaign: S1 \u2014 opening a form'}</Text>
         </Pressable>
         <Pressable
-          onPress={() => { void runS2Campaign(false); }}
+          onPress={() => { void runS2Campaign('plain'); }}
           disabled={busy}
           style={styles.capture}
           accessibilityRole="button"
@@ -968,13 +993,23 @@ export default function App(): React.JSX.Element {
           <Text>{busy ? 'running\u2026' : 'Run campaign: S2 \u2014 moving between fields'}</Text>
         </Pressable>
         <Pressable
-          onPress={() => { void runS2Campaign(true); }}
+          onPress={() => { void runS2Campaign('blur-before-collapse'); }}
           disabled={busy}
           style={styles.capture}
           accessibilityRole="button"
         >
           <Text>
             {busy ? 'running\u2026' : 'Run campaign: S2 \u2014 VARIANT: blur before collapsing'}
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={() => { void runS2Campaign('no-input-services'); }}
+          disabled={busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>
+            {busy ? 'running\u2026' : 'Run campaign: S2 \u2014 VARIANT: no autofill / spell-check'}
           </Text>
         </Pressable>
         <Pressable
@@ -1111,6 +1146,7 @@ export default function App(): React.JSX.Element {
                     }
                     registerInput={registerInput}
                     onFieldFocus={onFieldFocus}
+                    suppressInputServices={quietInputs}
                     field={f}
                     profile={profile}
                     state={state.state[f.id]!}

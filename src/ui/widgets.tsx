@@ -65,6 +65,26 @@ interface WidgetProps {
   registerInput?: (id: string, input: TextInput | null) => void;
   /** `S2`'s STOP: the target field has taken focus and accepts input. */
   onFieldFocus?: (id: string) => void;
+  /**
+   * 🔴 `S2`'s SECOND HYPOTHESIS, AS A VARIANT RATHER THAN A FIX.
+   *
+   * Focusing a `TextInput` on Android wakes the **autofill** and **spell-check**
+   * services, each of which keeps per-session state. Those are the remaining
+   * candidates for the cost that grows with accumulated focus operations —
+   * mounting was ruled out by `S1` staying flat over 101 mounts, and unmounting
+   * a focused input by the blur variant changing nothing.
+   *
+   * ⚠ TURNED ON ONLY FOR THE VARIANT RUN. If these props were simply applied,
+   * a disappearing trend would prove nothing: there would be no run to compare
+   * against, and “we changed three things and it got better” is not a finding.
+   *
+   * ✕ AND THEY ARE NOT FREE IF THEY WORK. `autoComplete` off and
+   * `importantForAutofill` *no* deny the worker their saved addresses and the
+   * platform's own convenience; `spellCheck` false removes correction from free
+   * text a field worker types one-handed. *That is a product decision, not a
+   * performance switch.*
+   */
+  suppressInputServices?: boolean;
   field: FieldDef;
   profile: Profile;
   state: FieldState;
@@ -101,6 +121,9 @@ function controlStyle(profile: Profile, valid: boolean) {
 
 export function FieldWidget(props: WidgetProps): React.JSX.Element {
   const { field, profile, state, value, onCommit, registerInput, onFieldFocus } = props;
+  const quiet = props.suppressInputServices
+    ? ({ importantForAutofill: 'no', autoComplete: 'off', spellCheck: false } as const)
+    : null;
   const { t } = useBox(profile, field);
 
   const label = (
@@ -116,6 +139,7 @@ export function FieldWidget(props: WidgetProps): React.JSX.Element {
           <TextInput
             ref={(r) => registerInput?.(field.id, r)}
             onFocus={() => onFieldFocus?.(field.id)}
+            {...quiet}
             style={[controlStyle(profile, state.valid), { fontSize: t.valueDp, color: t.text }]}
             defaultValue={String(value ?? '')}
             onBlur={(e) => onCommit(field.id, e.nativeEvent.text)}
@@ -128,6 +152,7 @@ export function FieldWidget(props: WidgetProps): React.JSX.Element {
           <TextInput
             ref={(r) => registerInput?.(field.id, r)}
             onFocus={() => onFieldFocus?.(field.id)}
+            {...quiet}
             style={[controlStyle(profile, state.valid), { fontSize: t.valueDp, color: t.text }]}
             keyboardType="numeric"
             defaultValue={String(value ?? '')}
