@@ -198,6 +198,28 @@ export default function App(): React.JSX.Element {
    * `openSectionRef`: a dependency list is a thing to keep correct, and a ref
    * read at call time cannot be stale.
    */
+  /**
+   * 🔴 MEASURED, BUT NOT AS `S1`. The launch was instrumented as `S1`
+   * and it is not one: M7 starts `S1` at the form-open tap **from the job
+   * list with the store already open**. Timing a cold start under that
+   * name put a launch figure against a navigation's 300 ms target, and it
+   * also meant ordinary use filled `S1`'s slot with the wrong thing — so a
+   * real `S1` campaign would later have been refused for the wrong reason.
+   *
+   * ➕ The number is kept because it is the most expensive thing observed
+   * so far, and it is reported with **no target and no verdict**.
+   *
+   * ⚠ DECLARED HERE, ABOVE `onDeliver`, AND THAT IS THE FIX. It used to be
+   * declared ~120 lines BELOW the callback that reads it and below that
+   * callback's dependency list — a `const` used before its own declaration,
+   * which only works because the transpiler lowers it to a `var`. *It is the
+   * same fragility `NAV_TIMEOUT_MS` was hoisted out of, and it plausibly
+   * explains why `incidental-marks` records have never carried a cold start
+   * while campaign records do — though that was never confirmed, and
+   * `openTimings.totalMs` has since become the better number anyway.*
+   */
+  const [coldStartMs, setColdStartMs] = React.useState<number | null>(null);
+
   const openTimingsRef = React.useRef<OpenTimings | null>(null);
   openTimingsRef.current = openTimings;
 
@@ -1001,18 +1023,6 @@ export default function App(): React.JSX.Element {
    * splash screen. It cost an install cycle before it was noticed.
    */
   const [openFailure, setOpenFailure] = React.useState<string>('');
-  /**
-   * 🔴 MEASURED, BUT NOT AS `S1`. The launch was instrumented as `S1`
-   * and it is not one: M7 starts `S1` at the form-open tap **from the job
-   * list with the store already open**. Timing a cold start under that
-   * name put a launch figure against a navigation's 300 ms target, and it
-   * also meant ordinary use filled `S1`'s slot with the wrong thing — so a
-   * real `S1` campaign would later have been refused for the wrong reason.
-   *
-   * ➕ The number is kept because it is the most expensive thing observed
-   * so far, and it is reported with **no target and no verdict**.
-   */
-  const [coldStartMs, setColdStartMs] = React.useState<number | null>(null);
 
   /**
    * 🔴 THE LIST IS WHAT MAKES `S1` AND `S4` MEASURABLE AT ALL. Both are

@@ -17,7 +17,8 @@
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
         },
-        "NSLocalNetworkUsageDescription": "The spike delivers its measurements to the development machine on the local network, and uploads media to the local object store that axis 5 measures."
+        "NSLocalNetworkUsageDescription": "The spike delivers its measurements to the development machine on the local network, and uploads media to the local object store that axis 5 measures.",
+        "NSLocationWhenInUseUsageDescription": "The spike stamps a photograph with the device location at the capture moment, which is what SwR-102 binds and what condition 1's S5 figure measures."
       }
     },
     "plugins": [
