@@ -18,7 +18,8 @@
  * interruption is likely rather than hypothetical.
  */
 import { File, Directory, Paths } from 'expo-file-system';
-import { Asset } from 'expo-asset';
+
+import { resolveFixtureOnce } from './expo-media.ts';
 
 import type { EncryptedStore } from '../store/store.ts';
 import type { Job } from '../form/worklist.ts';
@@ -204,10 +205,25 @@ export async function buildFill(
      * ⚠ Read ONCE, outside the loop. Re-reading per file would make the build
      * measure the asset pipeline.
      */
-    const [asset] = await Asset.loadAsync(require('../../assets/s5-fixture.jpg'));
-    const src = asset?.localUri && asset.localUri.includes(':') ? asset.localUri : null;
-    if (!src) throw new Error('the fill could not resolve the fixture to copy');
-    const bytes = await new File(src).bytes();
+    /**
+     * 🔴 THE SAME RESOLVER `S5` USES, AND WRITING A SECOND ONE WAS THE BUG.
+     *
+     * The first version here called `Asset.loadAsync(…)` and checked the
+     * result for a scheme — so it correctly DETECTED the problem and then
+     * failed: *“the fill could not resolve the fixture to copy”*. ✕ **The
+     * detection was copied and the fix was not.**
+     *
+     * ⚠ `F-4` had already recorded exactly this, in terms: in a release
+     * Android build Metro bundles a required image as a **drawable resource**,
+     * `expo-asset` hands back the bare resource name as `localUri`, and
+     * *“every consumer other than `<Image>` meets this”*. **The very next
+     * consumer written met it, and the recorded finding was not applied.**
+     *
+     * ➕ So this imports the resolver rather than repeating it. *A finding
+     * written down and not reused is a finding that cost its price twice.*
+     */
+    const fixture = await resolveFixtureOnce();
+    const bytes = await new File(fixture.uri).bytes();
     if (bytes.length === 0) throw new Error('the fixture read back empty');
 
     const dir = fillMediaDir();

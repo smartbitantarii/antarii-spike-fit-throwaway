@@ -214,7 +214,7 @@ export async function captureFromFixture(
   return prepareFromImage(file.uri, file.width, file.height, plan);
 }
 
-interface FixtureFile {
+export interface FixtureFile {
   uri: string;
   width: number;
   height: number;
@@ -266,7 +266,7 @@ interface FixtureFile {
  */
 let fixture: FixtureFile | null = null;
 
-async function resolveFixtureOnce(): Promise<FixtureFile> {
+export async function resolveFixtureOnce(): Promise<FixtureFile> {
   if (fixture) return fixture;
 
   const asset = Asset.fromModule(require('../../assets/s5-fixture.jpg'));
