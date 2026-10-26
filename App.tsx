@@ -178,6 +178,47 @@ export default function App(): React.JSX.Element {
   const [openSection, setOpenSection] = React.useState<string>(form.sections[0]!.id);
 
   /**
+   * 🔴 A COLLAPSED SECTION IS HIDDEN, NOT DESTROYED — `F-6`'s RULE, IMPLEMENTED.
+   *
+   * `SwR-082` requires collapsible sections, one expanded at a time. That is a
+   * requirement about **what the worker sees**; how a collapse is implemented
+   * was the author's choice, and the first choice was to UNMOUNT. Measurement
+   * found what that costs: moving focus between fields gets steadily more
+   * expensive the more it is done, **but only when the section is collapsed and
+   * re-expanded between moves** — 36.8 → 220.4 ms at the §3a fill, +2.191 ms per
+   * iteration. A `no-collapse` diagnostic stayed **flat at ~21 ms** and did so
+   * *in a process the collapsing run had already dragged to ~106 ms*.
+   *
+   * ➕ SO THIS IS NOT A DEVIATION FROM M7 §3 step 4. Step 4 says *“Collapse the
+   * section. (reset)”*, and the section is still collapsed from the worker's
+   * point of view. **The unmount was never the instruction.** *(Unlike the
+   * 5-versus-19 transitions, which IS a deviation and carries an owner
+   * decision.)*
+   *
+   * ⚠ MOUNTED ON FIRST EXPAND, HIDDEN THEREAFTER — NOT MOUNTED ALWAYS. Keeping
+   * every section mounted from the start would make **opening a form** mount
+   * every field of every section, which would change `S1`'s figure — the one
+   * just measured at the fill. *Nothing a worker has opened is destroyed; what
+   * they have never opened is not built.* ✕ The memory cost of holding a whole
+   * form's view hierarchy is noted in `F-6` and is NOT measured here.
+   */
+  const [everExpanded, setEverExpanded] = React.useState<ReadonlySet<string>>(
+    () => new Set([form.sections[0]!.id]),
+  );
+  React.useEffect(() => {
+    if (!openSection || everExpanded.has(openSection)) return;
+    setEverExpanded((prev) => new Set([...prev, openSection]));
+  }, [openSection, everExpanded]);
+
+  /**
+   * ⚠ Read SYNCHRONOUSLY by `S2`'s reset. With the fields hidden rather than
+   * unmounted there is no registration to wait for — the inputs never leave —
+   * so the campaign waits on the section's own state instead.
+   */
+  const openSectionRef = React.useRef(openSection);
+  openSectionRef.current = openSection;
+
+  /**
    * SwR-093's switch. The preference object holds the profile and nothing else
    * — it has no reference to answers or to the instance, which is how "affects
    * no captured data, and is not recorded on the instance" is true by
@@ -519,6 +560,32 @@ export default function App(): React.JSX.Element {
    * reason: a reset that silently never completes must not look like a slow
    * device.
    */
+  /**
+   * Waits until the dense section is open or collapsed.
+   *
+   * ⚠ REPLACES WAITING FOR THE INPUTS TO UNREGISTER, which only worked while a
+   * collapse destroyed them. Now that it hides them the registration never
+   * changes, and the old wait would simply have timed out — *a reset that
+   * cannot complete would have looked like a slow device, which is the defect
+   * this project keeps rediscovering.*
+   */
+  const awaitSection = React.useCallback(
+    async (wantOpen: boolean): Promise<void> => {
+      const until = Date.now() + NAV_TIMEOUT_MS;
+      for (;;) {
+        if ((openSectionRef.current === 'dense') === wantOpen) return;
+        if (Date.now() > until) {
+          throw new Error(
+            'S2: the dense section did not ' + (wantOpen ? 'open' : 'collapse') +
+              ' within ' + NAV_TIMEOUT_MS + 'ms',
+          );
+        }
+        await new Promise<void>((r) => setTimeout(r, 8));
+      }
+    },
+    [],
+  );
+
   const awaitRegistration = React.useCallback(
     async (id: string, present: boolean): Promise<void> => {
       const until = Date.now() + NAV_TIMEOUT_MS;
@@ -591,14 +658,15 @@ export default function App(): React.JSX.Element {
       // renders no fields — and the section starts COLLAPSED, so iteration 1
       // begins in the same state M7's reset leaves every other iteration in.
       setScreen('form');
+      // The fields mount on their FIRST expand and are only hidden afterwards,
+      // so the section is opened once before anything can be focused.
+      setOpenSection('dense');
+      await awaitRegistration(pairs[0]![0], true);
       if (collapses) {
-        // Start collapsed, so iteration 1 begins in the state M7's reset leaves
+        // Then collapsed, so iteration 1 begins in the state M7's reset leaves
         // every other iteration in.
         setOpenSection('');
-        await awaitRegistration(pairs[0]![0], false);
-      } else {
-        setOpenSection('dense');
-        await awaitRegistration(pairs[0]![0], true);
+        await awaitSection(false);
       }
 
       const fresh = new Harness(runContext, () => performance.now());
@@ -612,7 +680,7 @@ export default function App(): React.JSX.Element {
           // measured under, not part of what is timed.
           if (collapses) {
             setOpenSection('dense');
-            await awaitRegistration(pairs[0]![0], true);
+            await awaitSection(true);
           }
 
           // M7 step 2: focus field 1. ⚠ OUTSIDE the timing — it is the pass's
@@ -658,7 +726,7 @@ export default function App(): React.JSX.Element {
               focusInputs.current[pairs[pairs.length - 1]![1]]?.blur();
             }
             setOpenSection('');
-            await awaitRegistration(pairs[0]![0], false);
+            await awaitSection(false);
           }
         },
         {
@@ -692,7 +760,7 @@ export default function App(): React.JSX.Element {
       setQuietInputs(false);
       setBusy(false);
     }
-  }, [awaitRegistration, focusAndWait, form, runContext]);
+  }, [awaitRegistration, awaitSection, focusAndWait, form, runContext]);
 
   React.useEffect(() => {
     if (screen !== 'list' || !ready) return;
@@ -1380,8 +1448,14 @@ export default function App(): React.JSX.Element {
                 {expanded ? '▾' : '▸'} {section.label}
               </Text>
             </Pressable>
-            {expanded &&
-              form.fields
+            {/*
+              🔴 `display: 'none'` — the fields stay mounted and leave the layout.
+              Rendering them with `{expanded && …}` destroyed them on every
+              collapse, which is what made focus cost grow. See `everExpanded`.
+            */}
+            {everExpanded.has(section.id) && (
+            <View style={expanded ? undefined : styles.collapsed}>
+              {form.fields
                 .filter((f) => f.section === section.id && state.state[f.id]?.visible)
                 .map((f, fieldIndex) => (
                   <FieldWidget
@@ -1399,6 +1473,8 @@ export default function App(): React.JSX.Element {
                     onCommit={onCommit}
                   />
                 ))}
+            </View>
+            )}
             {expanded && section.repeating ? (
               <Text style={styles.note}>
                 repeating presentation: {repeatPresentation} ({repeatColumns} columns, {width}dp
@@ -1424,6 +1500,8 @@ const styles = StyleSheet.create({
   screen: { flex: 1, paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 0 },
   /** Bounded, so the screen underneath stays visible and reachable. */
   controlsPane: { maxHeight: '55%' },
+  /** §F-6: collapsed means hidden and out of layout, never unmounted. */
+  collapsed: { display: 'none' },
   /** Inside a screen that already pads for the status bar; padding twice would gap. */
   pane: { flex: 1 },
   content: { padding: 16 },

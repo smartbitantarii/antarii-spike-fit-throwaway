@@ -51,7 +51,7 @@ export const SEQUENCES: Readonly<Record<SeqId, SequenceSpec>> = Object.freeze({
       'Focus field 1.',
       'For each focusable pair: mark start → move focus to the next → on accepting input, mark stop.',
       'Reduce the pass by its own p95 (§4b) — one sample per iteration.',
-      'Collapse the section. (reset)',
+      'Collapse the section — HIDDEN, not unmounted (reset). (F-6)',
     ],
     drivable: true,
     deviation:
@@ -59,7 +59,7 @@ export const SEQUENCES: Readonly<Record<SeqId, SequenceSpec>> = Object.freeze({
       'TextInput, because the section deliberately cycles eight types. The 5 real transitions ' +
       'are measured instead. §4b reduces a pass by its own p95, and nearest-rank p95 over 19 ' +
       'is rank 19 — the maximum — so counting the 14 non-moves as instantaneous would give the ' +
-      'SAME figure while claiming to have measured them. (Decision — owner, 2026-10-24.)',
+      'SAME figure while claiming to have measured them. (Decision — owner, 2026-10-24.) ✕ The collapse being implemented as HIDING rather than unmounting is NOT part of this deviation: M7 step 4 says "Collapse the section", which is the state the worker sees, and the unmount was the author’s choice. Hiding is step 4 done correctly — see F-6.',
   },
   S3: {
     id: 'S3',
