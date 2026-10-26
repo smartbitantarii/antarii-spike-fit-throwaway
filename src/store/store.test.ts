@@ -169,3 +169,74 @@ test('sizeBytes refuses a zero page count as well as a missing one', async () =>
   await s.open();
   await assert.rejects(() => s.sizeBytes(), /cannot be measured/);
 });
+
+// ------------------------------------------- step 1: pricing the launch
+
+/**
+ * A clock that advances with WORK DONE, not with calls to itself.
+ *
+ * ⚠ The first version advanced on every read, so a phase that did no work
+ * still appeared to cost a tick — and the test asserting that a SKIPPED
+ * integrity check costs nothing failed against the fixture rather than
+ * against the store. *A clock that ticks when nothing happens cannot measure
+ * whether something happened.*
+ */
+function workClock(calls: string[], step = 10) {
+  return () => calls.length * step;
+}
+
+test('open() reports what each phase cost, and the phases sum to the total', async () => {
+  const { db, calls } = fakeDb();
+  const s = new SqlCipherStore('spike.db', keys, async () => db, { now: workClock(calls) });
+  await s.open();
+  const t = s.lastOpen();
+  assert.ok(t, 'the timings must exist after an open');
+  // ⚠ The SUM is asserted rather than the parts: a phase boundary put in the
+  // wrong place still produces plausible-looking numbers, and only the sum
+  // catches a phase counted twice or not at all.
+  assert.equal(t!.keyMs + t!.integrityMs + t!.schemaMs, t!.totalMs);
+  assert.ok(t!.integrityMs > 0, 'the check ran, so it must cost something');
+  assert.equal(t!.integrityChecked, true);
+});
+
+test('🔴 the integrity check runs by DEFAULT — it can only be turned off deliberately', async () => {
+  /**
+   * The check is axis 5 leg (iv)'s own subject: the cheapest proof the file
+   * really is keyed. ⚠ A default of OFF, or a flag that fell back to off when
+   * unreadable, would mean a store silently opening unverified — the quiet
+   * failure the whole axis exists to catch.
+   */
+  const { db, calls } = fakeDb();
+  const s = new SqlCipherStore('spike.db', keys, async () => db);
+  await s.open();
+  assert.ok(
+    calls.some((c) => c.includes('cipher_integrity_check')),
+    'with no option passed, the check must still run',
+  );
+});
+
+test('with the check off, it is not run and the record says so', async () => {
+  const { db, calls } = fakeDb();
+  const s = new SqlCipherStore('spike.db', keys, async () => db, {
+    integrityCheckOnOpen: false,
+    now: workClock(calls),
+  });
+  await s.open();
+  assert.ok(
+    !calls.some((c) => c.includes('cipher_integrity_check')),
+    'the check must not run when it is turned off',
+  );
+  const t = s.lastOpen();
+  // ➕ The flag travels with the timings, so a launch taken without the check
+  // can never be mistaken for one taken with it.
+  assert.equal(t!.integrityChecked, false);
+  assert.equal(t!.integrityMs, 0, 'a phase that did not run costs nothing');
+  assert.equal(t!.keyMs + t!.integrityMs + t!.schemaMs, t!.totalMs);
+});
+
+test('lastOpen is null before the first open, not a zeroed record', async () => {
+  // A zeroed record would look like an open that cost nothing.
+  const { db } = fakeDb();
+  const s = new SqlCipherStore('spike.db', keys, async () => db);
+  assert.equal(s.lastOpen(), null);
+});

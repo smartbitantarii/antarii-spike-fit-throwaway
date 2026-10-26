@@ -17,9 +17,38 @@
 
 import type { Job } from '../form/worklist.ts';
 
+/**
+ * 🔴 WHAT OPENING THE STORE COSTS, BROKEN INTO ITS PARTS — BECAUSE THE
+ * NUMBER THAT MATTERS MOST HAS SO FAR BEEN AN INFERENCE.
+ *
+ * At the §3a fill the cold start is **3.4–3.9 s** against **~290 ms** at an
+ * empty store, and that difference was ATTRIBUTED to `PRAGMA
+ * cipher_integrity_check` reading a 512 MiB database. ⚠ **Attributed, not
+ * measured**: it is the gap between two whole launches, each of which also
+ * loads a JavaScript bundle, mounts React and opens a file.
+ *
+ * `F-1` *(bind launch with a target, or exempt it)* and `F-3` *(what the
+ * integrity check is worth)* both rest on that number and are both sitting on
+ * the owner. **A decision resting on an inference deserves the measurement
+ * instead**, and it costs one timer per phase.
+ */
+export interface OpenTimings {
+  /** `PRAGMA key` — key stretching, which does NOT scale with the data */
+  keyMs: number;
+  /** `PRAGMA cipher_integrity_check` — reads the database, so it DOES scale */
+  integrityMs: number;
+  /** the schema statements */
+  schemaMs: number;
+  totalMs: number;
+  /** false when the operator turned the check off for this launch */
+  integrityChecked: boolean;
+}
+
 export interface EncryptedStore {
   /** opens, keying the database; throws if the key is wrong or absent */
   open(): Promise<void>;
+  /** what the last `open()` cost, by phase; null before the first open */
+  lastOpen(): OpenTimings | null;
   /** SwR-066's clock stops when the write is COMMITTED, not queued (brief §6c) */
   putAnswer(record: string, field: string, value: unknown): Promise<void>;
   getAnswers(record: string): Promise<Record<string, unknown>>;
@@ -94,13 +123,36 @@ export class SqlCipherStore implements EncryptedStore {
   private readonly openDb: OpenDatabase;
   private db: SqliteLike | null = null;
 
-  constructor(name: string, keys: KeyProvider, openDb: OpenDatabase) {
+  private timings: OpenTimings | null = null;
+  private readonly integrityCheckOnOpen: boolean;
+  private readonly now: () => number;
+
+  /**
+   * ⚠ `integrityCheckOnOpen` DEFAULTS TO TRUE, and the default is the point.
+   * The check is **axis 5 leg (iv)'s own subject** — the cheapest proof the
+   * file really is keyed — so turning it off is an experiment the operator
+   * opts into, never a quiet optimisation. *The flag travels in the record so
+   * a launch taken without it can never be mistaken for one taken with it.*
+   */
+  constructor(
+    name: string,
+    keys: KeyProvider,
+    openDb: OpenDatabase,
+    options: { integrityCheckOnOpen?: boolean; now?: () => number } = {},
+  ) {
     this.name = name;
     this.keys = keys;
     this.openDb = openDb;
+    this.integrityCheckOnOpen = options.integrityCheckOnOpen ?? true;
+    this.now = options.now ?? (() => Date.now());
+  }
+
+  lastOpen(): OpenTimings | null {
+    return this.timings;
   }
 
   async open(): Promise<void> {
+    const t0 = this.now();
     const db = await this.openDb(this.name);
     const key = await this.keys.key();
     // The PRAGMA must precede any other statement: SQLCipher decides keying
@@ -108,11 +160,22 @@ export class SqlCipherStore implements EncryptedStore {
     // database rather than fail — which is the quiet failure leg (iv) looks
     // for, so the ordering is asserted rather than assumed.
     await db.execAsync(`${KEY_PRAGMA} = '${key.replace(/'/g, "''")}'`);
-    // cipher_integrity_check is the cheapest proof the file really is keyed
-    const rows = await db.getAllAsync('PRAGMA cipher_integrity_check', []);
-    if (rows.length > 0) {
-      throw new Error(`store: cipher integrity check reported ${rows.length} problem(s)`);
+    const tKeyed = this.now();
+
+    /**
+     * ✕ SKIPPABLE ONLY BY AN EXPLICIT OPERATOR CHOICE, and the record says
+     * which. `F-3` lists alternatives nobody has weighed — check on first open
+     * only · a sample of pages · on a schedule · in the background after the UI
+     * is interactive — and weighing them needs the price of the current
+     * answer. **This is how that price is read.**
+     */
+    if (this.integrityCheckOnOpen) {
+      const rows = await db.getAllAsync('PRAGMA cipher_integrity_check', []);
+      if (rows.length > 0) {
+        throw new Error(`store: cipher integrity check reported ${rows.length} problem(s)`);
+      }
     }
+    const tChecked = this.now();
     await db.execAsync(
       'CREATE TABLE IF NOT EXISTS answers (record TEXT NOT NULL, field TEXT NOT NULL, value TEXT, PRIMARY KEY (record, field))',
     );
@@ -128,6 +191,15 @@ export class SqlCipherStore implements EncryptedStore {
       'CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, reference TEXT NOT NULL, ' +
         'customer TEXT NOT NULL, site TEXT NOT NULL, due TEXT NOT NULL, state TEXT NOT NULL)',
     );
+    const tDone = this.now();
+
+    this.timings = {
+      keyMs: tKeyed - t0,
+      integrityMs: tChecked - tKeyed,
+      schemaMs: tDone - tChecked,
+      totalMs: tDone - t0,
+      integrityChecked: this.integrityCheckOnOpen,
+    };
     this.db = db;
   }
 

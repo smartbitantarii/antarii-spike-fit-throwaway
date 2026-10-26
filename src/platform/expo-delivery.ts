@@ -96,6 +96,18 @@ const DEVICE_FILE = 'device-label.txt';
  */
 const FILL_FILE = 'fill-state.txt';
 
+/**
+ * 🔴 WHETHER THE INTEGRITY CHECK RUNS ON OPEN — an experiment the operator
+ * opts INTO, persisted because the check happens during start-up and so cannot
+ * be toggled by a running app.
+ *
+ * ⚠ ABSENT MEANS ON. A missing file, an unreadable one, or any value other
+ * than the exact word `off` leaves the check running. *The check is axis 5 leg
+ * (iv)'s own subject; a storage glitch must not quietly disable the thing the
+ * axis exists to prove.*
+ */
+const INTEGRITY_FILE = 'integrity-check.txt';
+
 function readSetting(name: string): string {
   try {
     const f = new File(figuresDir(), name);
@@ -126,6 +138,14 @@ export function readCollectorBase(): string {
  * the wrong handset. Changing it therefore takes effect on the next launch,
  * which the field says.
  */
+export function readIntegrityCheckOnOpen(): boolean {
+  return readSetting(INTEGRITY_FILE).toLowerCase() !== 'off';
+}
+
+export async function saveIntegrityCheckOnOpen(on: boolean): Promise<void> {
+  await saveSetting(INTEGRITY_FILE, on ? 'on' : 'off');
+}
+
 export function readDeviceLabel(): string {
   return readSetting(DEVICE_FILE);
 }

@@ -26,7 +26,7 @@ import {
 import { Harness, type Figure, type RunContext } from './src/harness/harness.ts';
 import { evaluate, plan } from './src/form/evaluate.ts';
 import type { Answers, FormDef } from './src/form/model.ts';
-import { SqlCipherStore } from './src/store/store.ts';
+import { SqlCipherStore, type OpenTimings } from './src/store/store.ts';
 import { buildFill, clearFill, measureFill } from './src/platform/expo-fill.ts';
 import { describeFill, fillState, type FillState } from './src/store/fill.ts';
 import { Queue } from './src/queue/queue.ts';
@@ -60,6 +60,8 @@ import {
   saveDeviceLabel,
   readFillState,
   saveFillState,
+  readIntegrityCheckOnOpen,
+  saveIntegrityCheckOnOpen,
 } from './src/platform/expo-delivery.ts';
 import { ProfilePreference, type Profile } from './src/ui/profile.ts';
 import { repeatingPresentation, type RepeatingPresentation } from './src/ui/presentation.ts';
@@ -168,9 +170,22 @@ export default function App(): React.JSX.Element {
     () => new Harness(runContext, () => performance.now()),
     [runContext],
   );
+  /**
+   * ⚠ READ ONCE, AT MOUNT, like the device label — the store opens during
+   * start-up, so a flag read later would describe a launch that already
+   * happened.
+   */
+  const integrityCheckOnOpen = React.useMemo(() => readIntegrityCheckOnOpen(), []);
+  const [integrityPref, setIntegrityPref] = React.useState(integrityCheckOnOpen);
+  const [openTimings, setOpenTimings] = React.useState<OpenTimings | null>(null);
+
   const store = React.useMemo(
-    () => new SqlCipherStore('spike.db', keystoreKeyProvider, openExpoDatabase),
-    [],
+    () =>
+      new SqlCipherStore('spike.db', keystoreKeyProvider, openExpoDatabase, {
+        integrityCheckOnOpen,
+        now: () => performance.now(),
+      }),
+    [integrityCheckOnOpen],
   );
 
   const [answers, setAnswers] = React.useState<Answers>({});
@@ -902,6 +917,7 @@ export default function App(): React.JSX.Element {
         // Only an S2 figure carries one; every other sequence has no variants.
         isCampaign && campaignFigures!.some((f) => f.seq === 'S2') ? lastVariant.current : null,
         fillMeasured,
+        openTimings,
       );
       const json = stableJson(payload);
 
@@ -1096,8 +1112,12 @@ export default function App(): React.JSX.Element {
       try {
         const t0 = performance.now();
         await store.open();
+        // ⚠ Captured BEFORE the first query: the timings describe the open,
+        // and a later read would let a slow query be mistaken for a slow open.
+        const timings = store.lastOpen();
         const loaded = await store.getAnswers(RECORD);
         if (!live) return;
+        setOpenTimings(timings);
         setAnswers(loaded);
         setReady(true);
         setColdStartMs(performance.now() - t0);
@@ -1206,6 +1226,36 @@ export default function App(): React.JSX.Element {
           yet, whatever its margin.
         */}
         <Text style={styles.note}>{describeFill(fillMeasured)}</Text>
+        {/*
+          🔴 STEP 1: pricing the launch. The ~3.1 s attributed to the integrity
+          check was read off the difference between two whole launches; these
+          are timers around the phases themselves.
+        */}
+        <Text style={styles.note}>
+          {openTimings
+            ? 'store open ' + openTimings.totalMs.toFixed(1) + ' ms = key ' +
+              openTimings.keyMs.toFixed(1) + ' + integrity ' +
+              openTimings.integrityMs.toFixed(1) + ' + schema ' +
+              openTimings.schemaMs.toFixed(1) +
+              (openTimings.integrityChecked ? '' : '  (CHECK OFF)')
+            : 'store open: not measured yet'}
+        </Text>
+        <Pressable
+          onPress={() => {
+            const next = !integrityPref;
+            setIntegrityPref(next);
+            void saveIntegrityCheckOnOpen(next);
+          }}
+          disabled={fillBusy || busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>
+            {'Integrity check on open: ' + (integrityPref ? 'ON' : 'OFF') +
+              ' \u2014 restart to apply' +
+              (integrityPref === integrityCheckOnOpen ? '' : '  \u26a0 RESTART PENDING')}
+          </Text>
+        </Pressable>
         <Pressable
           onPress={() => { void onBuildFill(); }}
           disabled={fillBusy || busy}

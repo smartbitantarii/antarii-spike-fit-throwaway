@@ -401,6 +401,30 @@ export interface DevicePayload {
    * condition at all.
    */
   fillState: FillStateRecord | null;
+  /**
+   * 🔴 WHAT OPENING THE STORE COST THIS LAUNCH, BY PHASE.
+   *
+   * `coldStartMs` has been the only launch number, and the claim that
+   * *“`cipher_integrity_check` over a 512 MiB database costs ~3.1 s”* was read
+   * off the DIFFERENCE between a filled device and an empty one — two whole
+   * launches, each of which also loads a bundle and mounts React. ⚠ **That is
+   * an attribution, not a measurement**, and `F-1` and `F-3` both rest on it.
+   *
+   * ➕ These are timers around the phases themselves, so the check's cost is
+   * read directly and on ONE device in ONE state. `integrityChecked` says
+   * whether the check ran, so a launch taken without it can never be mistaken
+   * for one taken with it.
+   */
+  openTimings: OpenTimingsRecord | null;
+}
+
+/** Mirrors `src/store/store.ts`'s `OpenTimings`, so `report.ts` imports no store code. */
+export interface OpenTimingsRecord {
+  keyMs: number;
+  integrityMs: number;
+  schemaMs: number;
+  totalMs: number;
+  integrityChecked: boolean;
 }
 
 /** Mirrors `src/store/fill.ts`'s `FillState`, so `report.ts` imports no store code. */
@@ -434,6 +458,7 @@ export function devicePayload(
   locationDeadlineMs: number | null = null,
   variant: { name: string; note: string } | null = null,
   fillStateRecord: FillStateRecord | null = null,
+  openTimings: OpenTimingsRecord | null = null,
 ): DevicePayload {
   return {
     kind,
@@ -449,5 +474,6 @@ export function devicePayload(
     locationDeadlineMs,
     variant,
     fillState: fillStateRecord,
+    openTimings,
   };
 }
