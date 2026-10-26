@@ -179,6 +179,28 @@ export default function App(): React.JSX.Element {
   const [integrityPref, setIntegrityPref] = React.useState(integrityCheckOnOpen);
   const [openTimings, setOpenTimings] = React.useState<OpenTimings | null>(null);
 
+  /**
+   * 🔴 READ AT DELIVERY TIME, NOT CAPTURED WHEN `onDeliver` WAS BUILT.
+   *
+   * `onDeliver` is a `useCallback` whose dependencies are the figures, the
+   * cold start and the operator fields. ⚠ **`openTimings` and `fillMeasured`
+   * were not among them**, so the callback kept whatever those held when it
+   * was last rebuilt — and on 2026-10-26 every delivered record carried
+   * `openTimings: null` while the screen displayed the numbers correctly.
+   * **The measurement was taken, shown, and then not written down.**
+   *
+   * ✕ THE REASON THIS IS GALLING: `lastVariant` three hooks below is a ref for
+   * exactly this hazard, and its own comment says *“a stale closure here would
+   * stamp the WRONG variant onto a record, which is worse than stamping
+   * none”*. **The lesson was written and then not applied next door.**
+   *
+   * ➕ Refs rather than dependencies, to match `screenRef` and
+   * `openSectionRef`: a dependency list is a thing to keep correct, and a ref
+   * read at call time cannot be stale.
+   */
+  const openTimingsRef = React.useRef<OpenTimings | null>(null);
+  openTimingsRef.current = openTimings;
+
   const store = React.useMemo(
     () =>
       new SqlCipherStore('spike.db', keystoreKeyProvider, openExpoDatabase, {
@@ -916,8 +938,8 @@ export default function App(): React.JSX.Element {
         LOCATION_DEADLINE_MS,
         // Only an S2 figure carries one; every other sequence has no variants.
         isCampaign && campaignFigures!.some((f) => f.seq === 'S2') ? lastVariant.current : null,
-        fillMeasured,
-        openTimings,
+        fillRef.current,
+        openTimingsRef.current,
       );
       const json = stableJson(payload);
 
@@ -1031,9 +1053,11 @@ export default function App(): React.JSX.Element {
    */
   const [jobs, setJobs] = React.useState<Job[] | null>(null);
 
+  const fillRef = React.useRef<FillState | null>(null);
   const [fillMeasured, setFillState] = React.useState<FillState>(() =>
     fillState({ recordBytes: 0, mediaBytes: 0, jobs: 0, instances: 0, answers: 0, mediaFiles: 0 }),
   );
+  fillRef.current = fillMeasured;
   const [fillBusy, setFillBusy] = React.useState(false);
   const stopFill = React.useRef(false);
 
