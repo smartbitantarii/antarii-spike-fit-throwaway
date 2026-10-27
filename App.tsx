@@ -28,6 +28,7 @@ import { evaluate, plan } from './src/form/evaluate.ts';
 import type { Answers, FormDef } from './src/form/model.ts';
 import { SqlCipherStore, type OpenTimings } from './src/store/store.ts';
 import { buildFill, clearFill, measureFill } from './src/platform/expo-fill.ts';
+import { probeWasm } from './src/platform/expo-wasm.ts';
 import { describeFill, fillState, type FillState } from './src/store/fill.ts';
 import { Queue } from './src/queue/queue.ts';
 import { keystoreKeyProvider, openExpoDatabase } from './src/platform/expo-adapters.ts';
@@ -867,6 +868,27 @@ export default function App(): React.JSX.Element {
     };
   }, [ready, store, worklist]);
 
+  /**
+   * 🔴 STEP 3's DE-RISK, and it is deliberately NOT a campaign.
+   *
+   * It runs once, reports what happened, and produces no figure. *A p95 over
+   * a question that has not been answered yet would be a figure about
+   * nothing.* ➕ The timings are kept because ADR-005 §4.3 prices option B by
+   * what the runtime costs, and instantiation is most of that — but they are
+   * one observation, not a sample, and the line says so.
+   */
+  const [wasmLine, setWasmLine] = React.useState('wasm: not probed');
+  const onProbeWasm = React.useCallback(async () => {
+    setWasmLine('wasm: probing…');
+    const p = await probeWasm();
+    setWasmLine(
+      p.failure
+        ? 'wasm FAILED — ' + p.failure
+        : 'wasm ok — add(1,2)=' + p.result + ', ' + p.bytes + ' bytes, instantiate ' +
+          p.instantiateMs.toFixed(1) + ' ms, call ' + p.callMs.toFixed(3) + ' ms (n=1)',
+    );
+  }, []);
+
   const refreshFill = React.useCallback(async () => {
     setFillState(await measureFill(store));
   }, [store]);
@@ -1260,6 +1282,15 @@ export default function App(): React.JSX.Element {
           yet, whatever its margin.
         */}
         <Text style={styles.note}>{describeFill(fillMeasured)}</Text>
+        <Text style={styles.note}>{wasmLine}</Text>
+        <Pressable
+          onPress={() => { void onProbeWasm(); }}
+          disabled={fillBusy || busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>{'Probe WebAssembly (step 3 de-risk — not a figure)'}</Text>
+        </Pressable>
         {/*
           🔴 STEP 1: pricing the launch. The ~3.1 s attributed to the integrity
           check was read off the difference between two whole launches; these

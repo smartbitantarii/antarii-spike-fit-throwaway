@@ -198,6 +198,43 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      # ----------------------------------------------------------------
+      # 🔴 STEP 3's DE-RISK: Go → WebAssembly, compiled HERE because Go is
+      # not installed on the owner's machine and must not need to be —
+      # GP-009 R5 makes containers the development runtime, and CI is how
+      # every other artefact in this spike is already produced.
+      #
+      # ⚠ ITS OWN STEP, ON PURPOSE. Step 3 carries two separable unknowns:
+      # whether Go can emit a callable Wasm export, and whether the client
+      # can host a Wasm runtime at all. **A failure here means the first; a
+      # failure in the native build means the second**, and they cost very
+      # different amounts to fix. Folding them together would lose that.
+      #
+      # ⚠ `go-version` is PINNED rather than left to the runner: the export
+      # pragma `//go:wasmexport` needs Go 1.24 or later, and a runner that
+      # happened to ship 1.22 would fail in a way that looks like the
+      # pragma being wrong rather than the toolchain being old.
+      # ----------------------------------------------------------------
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: compile the de-risk module to WebAssembly
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          cd wasm
+          test -f go.mod || go mod init antarii/spike/wasm
+          GOOS=wasip1 GOARCH=wasm go build -o ../assets/add.wasm ./...
+          cd ..
+          ls -l assets/add.wasm
+          # ➕ The magic number is checked rather than assumed: a zero-byte or
+          # non-Wasm file would otherwise reach the device and fail there,
+          # which is a far more expensive place to discover it.
+          head -c 4 assets/add.wasm | od -An -tx1 | tr -d ' \n' | grep -q '^0061736d' \
+            || { echo 'assets/add.wasm is not a WebAssembly module'; exit 1; }
+          echo 'wasm magic number ok'
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -315,6 +352,43 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      # ----------------------------------------------------------------
+      # 🔴 STEP 3's DE-RISK: Go → WebAssembly, compiled HERE because Go is
+      # not installed on the owner's machine and must not need to be —
+      # GP-009 R5 makes containers the development runtime, and CI is how
+      # every other artefact in this spike is already produced.
+      #
+      # ⚠ ITS OWN STEP, ON PURPOSE. Step 3 carries two separable unknowns:
+      # whether Go can emit a callable Wasm export, and whether the client
+      # can host a Wasm runtime at all. **A failure here means the first; a
+      # failure in the native build means the second**, and they cost very
+      # different amounts to fix. Folding them together would lose that.
+      #
+      # ⚠ `go-version` is PINNED rather than left to the runner: the export
+      # pragma `//go:wasmexport` needs Go 1.24 or later, and a runner that
+      # happened to ship 1.22 would fail in a way that looks like the
+      # pragma being wrong rather than the toolchain being old.
+      # ----------------------------------------------------------------
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: compile the de-risk module to WebAssembly
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          cd wasm
+          test -f go.mod || go mod init antarii/spike/wasm
+          GOOS=wasip1 GOARCH=wasm go build -o ../assets/add.wasm ./...
+          cd ..
+          ls -l assets/add.wasm
+          # ➕ The magic number is checked rather than assumed: a zero-byte or
+          # non-Wasm file would otherwise reach the device and fail there,
+          # which is a far more expensive place to discover it.
+          head -c 4 assets/add.wasm | od -An -tx1 | tr -d ' \n' | grep -q '^0061736d' \
+            || { echo 'assets/add.wasm is not a WebAssembly module'; exit 1; }
+          echo 'wasm magic number ok'
 
       - run: npm ci
 

@@ -63,3 +63,7 @@ provenance-forbidden.txt
 npm-debug.log*
 .DS_Store
 Thumbs.db
+
+# Built in CI by the Go step, never committed: it is a build artefact, and a
+# stale copy in the tree would be bundled instead of the one just compiled.
+assets/add.wasm
