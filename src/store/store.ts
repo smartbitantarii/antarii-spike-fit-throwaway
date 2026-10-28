@@ -40,8 +40,37 @@ export interface OpenTimings {
   /** the schema statements */
   schemaMs: number;
   totalMs: number;
-  /** false when the operator turned the check off for this launch */
+  /**
+   * Whether the check ran **inside this open**.
+   *
+   * 🔴 SINCE ADR-003 §5.3.3a THIS IS NORMALLY FALSE, AND THAT IS THE DECISION,
+   * not a regression. *"The check runs IN FULL, in the background, once the UI
+   * is interactive. Launch does not wait for it."* ➕ The field is kept, and
+   * keeps travelling in the record, because **a launch taken with the check
+   * inline must never be mistaken for one taken without it** — the figures
+   * already in `figures/` were taken the old way and stay comparable.
+   */
   integrityChecked: boolean;
+}
+
+/**
+ * 🔴 WHAT THE BACKGROUND VERIFICATION FOUND — ADR-003 §5.3.3a's half of the
+ * store's integrity story, and `F-8`'s trigger.
+ *
+ * The check moved out of `open()` so launch could meet `SwR-100`'s 2-second
+ * bound *(Android: 3738 ms of open became 305 ms)*. ⚠ **Moving it changed WHEN
+ * a failure is known, not WHETHER** — so the outcome needs somewhere to live
+ * that is not an exception thrown into a start-up path nobody is waiting on.
+ */
+export interface VerifyOutcome {
+  /** `true` only when the check ran to completion and found nothing */
+  ok: boolean;
+  /** how long the full check took — the figure §5.3.3a moved out of launch */
+  durationMs: number;
+  /** how many rows `cipher_integrity_check` returned; 0 is a pass */
+  problems: number;
+  /** set when the check itself could not run, as opposed to finding problems */
+  error: string | null;
 }
 
 export interface EncryptedStore {
@@ -49,6 +78,17 @@ export interface EncryptedStore {
   open(): Promise<void>;
   /** what the last `open()` cost, by phase; null before the first open */
   lastOpen(): OpenTimings | null;
+
+  /**
+   * 🔴 ADR-003 §5.3.3a — run the full integrity check OFF the launch path,
+   * once the UI is interactive. Returns the outcome rather than throwing,
+   * because `F-8` wants the application running and telling the worker.
+   */
+  verify(): Promise<VerifyOutcome>;
+  /** what `verify()` found; null until it has run */
+  lastVerify(): VerifyOutcome | null;
+  /** `F-8`'s *"do not serve"* — true once verification has FAILED */
+  isQuarantined(): boolean;
   /** SwR-066's clock stops when the write is COMMITTED, not queued (brief §6c) */
   putAnswer(record: string, field: string, value: unknown): Promise<void>;
   getAnswers(record: string): Promise<Record<string, unknown>>;
@@ -124,15 +164,32 @@ export class SqlCipherStore implements EncryptedStore {
   private db: SqliteLike | null = null;
 
   private timings: OpenTimings | null = null;
+  private verifyOutcome: VerifyOutcome | null = null;
+  /** `F-8`'s *"do not serve"*, held as a reason rather than a boolean. */
+  private quarantine: string | null = null;
   private readonly integrityCheckOnOpen: boolean;
   private readonly now: () => number;
 
   /**
-   * ⚠ `integrityCheckOnOpen` DEFAULTS TO TRUE, and the default is the point.
-   * The check is **axis 5 leg (iv)'s own subject** — the cheapest proof the
-   * file really is keyed — so turning it off is an experiment the operator
-   * opts into, never a quiet optimisation. *The flag travels in the record so
-   * a launch taken without it can never be mistaken for one taken with it.*
+   * 🔴 `integrityCheckOnOpen` NOW DEFAULTS TO **FALSE** — ADR-003 §5.3.3a,
+   * *owner, 2026-10-27*. ✕ **It defaulted to TRUE until 2026-10-28**, and the
+   * comment here argued for that default on a justification the ADR has since
+   * found *"half wrong"*: the check was called *"the cheapest proof the file
+   * really is keyed"*, and it is not — **the `PRAGMA key` and any read prove
+   * the keying, because a wrong key fails the first query.** What the check
+   * uniquely detects is **page-level corruption or tampering**.
+   *
+   * ➕ So the trade was never proof-of-keying against speed. It was **whole-file
+   * corruption detection against 3433 ms on every Android launch** — and
+   * §5.3.3a resolves it by moving the check rather than dropping it: *"the
+   * check runs IN FULL, in the background, once the UI is interactive."*
+   * **Nothing is traded away in detection; only in timing.**
+   *
+   * ⚠ **The flag is KEPT, not deleted, and only an operator sets it true.**
+   * §5.3.3a asks for one more measurement it cannot yet make — *"there is no
+   * iOS equivalent of the 3433 ms net figure, and none is implied"*, needing
+   * *"three launches with the check toggled off"*. **Deleting the flag would
+   * delete the ability to reproduce every figure already in `figures/`.**
    */
   constructor(
     name: string,
@@ -143,12 +200,78 @@ export class SqlCipherStore implements EncryptedStore {
     this.name = name;
     this.keys = keys;
     this.openDb = openDb;
-    this.integrityCheckOnOpen = options.integrityCheckOnOpen ?? true;
+    this.integrityCheckOnOpen = options.integrityCheckOnOpen ?? false;
     this.now = options.now ?? (() => Date.now());
   }
 
   lastOpen(): OpenTimings | null {
     return this.timings;
+  }
+
+  lastVerify(): VerifyOutcome | null {
+    return this.verifyOutcome;
+  }
+
+  /**
+   * True once verification has FAILED. ⚠ Not the negation of `lastVerify()?.ok`
+   * — before the check has run this is **false**, because nothing is known yet
+   * and refusing on *unknown* would reinstate the blocking launch §5.3.3a
+   * removed.
+   */
+  isQuarantined(): boolean {
+    return this.quarantine !== null;
+  }
+
+  /**
+   * 🔴 ADR-003 §5.3.3a — THE FULL CHECK, RUN OFF THE LAUNCH PATH.
+   *
+   * *"The check runs IN FULL, in the background, once the UI is interactive.
+   * Launch does not wait for it."* ✅ **In full** is load-bearing: §5.3.3a
+   * chose this option because *"it is the only option that costs nothing in
+   * DETECTION"* — checking once after install, sampling pages, or checking on
+   * a schedule each trade away coverage. **So this runs the same single PRAGMA
+   * the launch path used to, over the whole file.**
+   *
+   * ✕ **IT DOES NOT THROW ON A FAILED CHECK, AND THAT IS `F-8`.** The old
+   * inline check threw, which refused the open — and `F-8` decided the
+   * opposite: ***start, do not serve, tell***. *"The application starts. It does
+   * NOT open the failed store for work. The worker is told plainly what has
+   * happened and that their unsynchronised work is at risk."* ➕ So a failure
+   * **quarantines** the store and is **returned**, for the caller to show.
+   * *Throwing here would land in a promise nobody awaits.*
+   *
+   * ⚠ **An error RUNNING the check is not a corrupt file**, and the two are
+   * reported separately — `problems` against `error`. *Quarantining a healthy
+   * store because a PRAGMA failed to execute would destroy work to protect it.*
+   */
+  async verify(): Promise<VerifyOutcome> {
+    const db = this.require();
+    const t0 = this.now();
+    try {
+      const rows = await db.getAllAsync('PRAGMA cipher_integrity_check', []);
+      const problems = rows.length;
+      const outcome: VerifyOutcome = {
+        ok: problems === 0,
+        durationMs: this.now() - t0,
+        problems,
+        error: null,
+      };
+      if (problems > 0) {
+        this.quarantine = `store: cipher integrity check reported ${problems} problem(s)`;
+      }
+      this.verifyOutcome = outcome;
+      return outcome;
+    } catch (err) {
+      // ✕ Deliberately NOT a quarantine — see the note above.
+      const outcome: VerifyOutcome = {
+        ok: false,
+        durationMs: this.now() - t0,
+        problems: 0,
+        error: err instanceof Error ? err.message : String(err),
+      };
+      this.verifyOutcome = outcome;
+      return outcome;
+    }
   }
 
   async open(): Promise<void> {
@@ -163,11 +286,16 @@ export class SqlCipherStore implements EncryptedStore {
     const tKeyed = this.now();
 
     /**
-     * ✕ SKIPPABLE ONLY BY AN EXPLICIT OPERATOR CHOICE, and the record says
-     * which. `F-3` lists alternatives nobody has weighed — check on first open
-     * only · a sample of pages · on a schedule · in the background after the UI
-     * is interactive — and weighing them needs the price of the current
-     * answer. **This is how that price is read.**
+     * 🔴 OFF BY DEFAULT SINCE ADR-003 §5.3.3a — the launch path does not verify.
+     *
+     * `F-3` listed four alternatives and the owner chose the fourth: **in the
+     * background, once the UI is interactive**, in full. So the ordinary path
+     * skips this block entirely and `verify()` below does the work.
+     *
+     * ⚠ **This block stays reachable on purpose.** It is the only way to
+     * reproduce the figures already taken, and §5.3.3a still wants *"three
+     * launches with the check toggled off"* on iOS to settle a net saving it
+     * refuses to borrow from Android.
      */
     if (this.integrityCheckOnOpen) {
       const rows = await db.getAllAsync('PRAGMA cipher_integrity_check', []);
@@ -376,8 +504,17 @@ export class SqlCipherStore implements EncryptedStore {
     }
   }
 
+  /**
+   * ⚠ `verify()` CALLS THIS TOO, AND MUST — it needs the handle. The quarantine
+   * is set only after the PRAGMA has returned, so the check can never lock
+   * itself out.
+   */
   private require(): SqliteLike {
     if (!this.db) throw new Error('store: open() must be awaited before use');
+    // 🔴 `F-8`'s *do not serve*: once verification has failed, every read and
+    // write refuses. The application keeps running and says why — that is the
+    // other half, and it belongs to the caller.
+    if (this.quarantine) throw new Error(this.quarantine);
     return this.db;
   }
 }

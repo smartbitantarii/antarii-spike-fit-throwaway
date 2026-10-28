@@ -432,6 +432,28 @@ export interface DevicePayload {
    * the platform permitted**, which is the whole of leg (i)'s question.
    */
   backgroundMarks: BackgroundMarkRecord[] | null;
+  /**
+   * 🔴 WHAT THE BACKGROUND INTEGRITY CHECK FOUND, AND WHAT IT COST THERE.
+   *
+   * ADR-003 §5.3.3a moved the check off the launch path, which **changes which
+   * record field carries its cost**: `openTimings.integrityMs` is now 0 on an
+   * ordinary launch, and this is where the figure lives instead.
+   *
+   * ⚠ **`durationMs` here is NOT comparable to the 3692 ms Android phase
+   * figure.** That one was measured inside a cold open with nothing else
+   * running; this one runs **while the UI is live**, so it competes for I/O
+   * with whatever the worker is doing. *Same PRAGMA, different conditions —
+   * and §5.3.3a's decision does not depend on the two matching.*
+   */
+  verify: VerifyOutcomeRecord | null;
+}
+
+/** Mirrors `src/store/store.ts`'s `VerifyOutcome`, so `report.ts` imports no store code. */
+export interface VerifyOutcomeRecord {
+  ok: boolean;
+  durationMs: number;
+  problems: number;
+  error: string | null;
 }
 
 /** Mirrors `src/platform/expo-background.ts`'s `BackgroundMark`. */
@@ -489,6 +511,7 @@ export function devicePayload(
   fillStateRecord: FillStateRecord | null = null,
   openTimings: OpenTimingsRecord | null = null,
   backgroundMarks: BackgroundMarkRecord[] | null = null,
+  verify: VerifyOutcomeRecord | null = null,
 ): DevicePayload {
   return {
     kind,
@@ -506,5 +529,6 @@ export function devicePayload(
     fillState: fillStateRecord,
     openTimings,
     backgroundMarks,
+    verify,
   };
 }

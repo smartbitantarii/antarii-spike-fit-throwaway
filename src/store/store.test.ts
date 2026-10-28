@@ -69,16 +69,84 @@ test('the key PRAGMA is the FIRST statement — a query before it would create a
   const s = new SqlCipherStore('spike.db', keys, async () => db);
   await s.open();
   assert.ok(calls[0].startsWith(`exec:${KEY_PRAGMA}`), `first call was ${calls[0]}`);
-  // and the integrity check comes before any table work
-  const integrity = calls.findIndex((c) => c.includes('cipher_integrity_check'));
-  const create = calls.findIndex((c) => c.includes('CREATE TABLE'));
-  assert.ok(integrity >= 0 && integrity < create, 'integrity proven before the schema is touched');
 });
 
-test('a failed integrity check refuses to open rather than carrying on', async () => {
+/**
+ * 🔴 THESE THREE TESTS REPLACE THREE THAT ENCODED THE OPPOSITE BEHAVIOUR, and
+ * the replacement is the point rather than a tidy-up.
+ *
+ * Until 2026-10-28 this file asserted *"integrity proven before the schema is
+ * touched"*, *"a failed integrity check refuses to open"* and *"the integrity
+ * check runs by DEFAULT"*. ✅ **All three were correct for the code and all
+ * three are now wrong for the decision**: ADR-003 §5.3.3a moved the check off
+ * the launch path, and `F-8` replaced refusing with ***start, do not serve,
+ * tell***. ⚠ *A test that outlives its decision defends the old behaviour
+ * against the new one, which is why these were rewritten and not deleted.*
+ */
+test('§5.3.3a — open() does NOT verify: launch runs no integrity check', async () => {
+  const { db, calls } = fakeDb();
+  const s = new SqlCipherStore('spike.db', keys, async () => db);
+  await s.open();
+  assert.ok(
+    !calls.some((c) => c.includes('cipher_integrity_check')),
+    'the launch path must not check — 3433 ms on Android is the whole reason',
+  );
+  assert.equal(s.lastOpen()!.integrityChecked, false);
+  assert.equal(s.lastOpen()!.integrityMs, 0, 'a phase that did not run costs nothing');
+});
+
+test('§5.3.3a — verify() runs the check IN FULL, and reports what it cost', async () => {
+  const { db, calls } = fakeDb();
+  const s = new SqlCipherStore('spike.db', keys, async () => db, { now: workClock(calls) });
+  await s.open();
+  const out = await s.verify();
+  assert.ok(
+    calls.some((c) => c.includes('cipher_integrity_check')),
+    'the check must still run — §5.3.3a trades timing, never detection',
+  );
+  assert.equal(out.ok, true);
+  assert.equal(out.problems, 0);
+  assert.equal(out.error, null);
+  assert.ok(out.durationMs > 0, 'the check ran, so it must cost something');
+  assert.deepEqual(s.lastVerify(), out);
+  assert.equal(s.isQuarantined(), false);
+});
+
+test('🔴 `F-8` — a failed check QUARANTINES rather than refusing the open', async () => {
   const { db } = fakeDb({ integrityProblems: 2 });
   const s = new SqlCipherStore('spike.db', keys, async () => db);
-  await assert.rejects(() => s.open(), /cipher integrity check reported 2/);
+
+  // ✅ "start": the open itself succeeds, because launch no longer verifies.
+  await s.open();
+  assert.equal(s.isQuarantined(), false, 'nothing is known before the check runs');
+
+  // ✕ And verify() must NOT throw — it lands in a promise nobody awaits.
+  const out = await s.verify();
+  assert.equal(out.ok, false);
+  assert.equal(out.problems, 2);
+
+  // ✅ "do not serve": every read and write now refuses, with the reason.
+  assert.equal(s.isQuarantined(), true);
+  await assert.rejects(() => s.getAnswers('r1'), /cipher integrity check reported 2/);
+  await assert.rejects(() => s.putAnswer('r1', 'f1', 'v'), /cipher integrity check reported 2/);
+});
+
+test('⚠ `F-8` — a check that FAILS TO RUN is not a corrupt file, and does not quarantine', async () => {
+  /**
+   * Quarantining a healthy store because a PRAGMA could not execute would
+   * destroy work in order to protect it — the inverse of what `F-8` is for.
+   */
+  const { db } = fakeDb();
+  db.getAllAsync = async () => {
+    throw new Error('disk I/O error');
+  };
+  const s = new SqlCipherStore('spike.db', keys, async () => db);
+  await s.open();
+  const out = await s.verify();
+  assert.equal(out.ok, false);
+  assert.equal(out.problems, 0, 'no problems were found — the check never got to look');
+  assert.match(out.error!, /disk I\/O error/);
+  assert.equal(s.isQuarantined(), false, 'an unrunnable check must not condemn the store');
 });
 
 test("a key containing a quote cannot break out of the PRAGMA", async () => {
@@ -187,7 +255,13 @@ function workClock(calls: string[], step = 10) {
 
 test('open() reports what each phase cost, and the phases sum to the total', async () => {
   const { db, calls } = fakeDb();
-  const s = new SqlCipherStore('spike.db', keys, async () => db, { now: workClock(calls) });
+  // ⚠ `integrityCheckOnOpen` is passed EXPLICITLY since 2026-10-28: §5.3.3a made
+  // the default false, and this test is about the phase arithmetic, which needs
+  // all three phases to have run.
+  const s = new SqlCipherStore('spike.db', keys, async () => db, {
+    integrityCheckOnOpen: true,
+    now: workClock(calls),
+  });
   await s.open();
   const t = s.lastOpen();
   assert.ok(t, 'the timings must exist after an open');
@@ -199,23 +273,32 @@ test('open() reports what each phase cost, and the phases sum to the total', asy
   assert.equal(t!.integrityChecked, true);
 });
 
-test('🔴 the integrity check runs by DEFAULT — it can only be turned off deliberately', async () => {
+test('🔴 the check is still run INLINE when an operator asks — the old figures stay reproducible', async () => {
   /**
-   * The check is axis 5 leg (iv)'s own subject: the cheapest proof the file
-   * really is keyed. ⚠ A default of OFF, or a flag that fell back to off when
-   * unreadable, would mean a store silently opening unverified — the quiet
-   * failure the whole axis exists to catch.
+   * ✕ THIS TEST ONCE ASSERTED THE OPPOSITE DEFAULT, and the inversion is
+   * recorded rather than smoothed over. It read *"the integrity check runs by
+   * DEFAULT — it can only be turned off deliberately"*, justified by the check
+   * being *"the cheapest proof the file really is keyed"*.
+   *
+   * 🔴 **That justification was found false** (ADR-003 §7.1 — the section's
+   * *"first row whose claim was checked and found FALSE"*): the `PRAGMA key`
+   * and any read prove the keying. **So the default inverted**, and what the
+   * inline path is for now is **reproducing measurements**, not safety —
+   * §5.3.3a still owes iOS *"three launches with the check toggled off"*.
    */
   const { db, calls } = fakeDb();
-  const s = new SqlCipherStore('spike.db', keys, async () => db);
+  const s = new SqlCipherStore('spike.db', keys, async () => db, {
+    integrityCheckOnOpen: true,
+  });
   await s.open();
-  assert.ok(
-    calls.some((c) => c.includes('cipher_integrity_check')),
-    'with no option passed, the check must still run',
-  );
+  const integrity = calls.findIndex((c) => c.includes('cipher_integrity_check'));
+  const create = calls.findIndex((c) => c.includes('CREATE TABLE'));
+  assert.ok(integrity >= 0, 'asked for inline, the check must run');
+  assert.ok(integrity < create, 'and still before the schema, so the phase timing is honest');
+  assert.equal(s.lastOpen()!.integrityChecked, true);
 });
 
-test('with the check off, it is not run and the record says so', async () => {
+test('with the check off — now the DEFAULT — it is not run and the record says so', async () => {
   const { db, calls } = fakeDb();
   const s = new SqlCipherStore('spike.db', keys, async () => db, {
     integrityCheckOnOpen: false,

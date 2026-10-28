@@ -53,6 +53,12 @@ GoogleService-Info.plist
 # must not reach the repository, and a redundant guard costs nothing.
 provenance-forbidden.txt
 
+# --- Rust build output (the ADR-005 §4.4a evaluator) ---
+# `target/` is a compiler cache, and a large one. `Cargo.lock` IS tracked, for
+# the same reason `package-lock.json` is: `D1` pins packages "by name and
+# version" because a p95 that gates an ADR has to be reproducible.
+evaluator/target/
+
 # --- measurement output ---
 # Figures belong in the record (§8), not in the history as raw dumps.
 /measurements/

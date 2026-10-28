@@ -1,0 +1,31 @@
+[package]
+name = "antarii-evaluator"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "ADR-005 §4.4a's ONE evaluator, for spike conditions 6 and 7. Disposable."
+
+# 🔴 NO DEPENDENCIES, AND IT IS A DECISION RATHER THAN AN ABSENCE.
+#
+# ADR-005 §4.4 rule 1.1 and the condition language specification §4.1 forbid
+# binary floating point "as a representation at every stage", and §4.6 makes
+# comparison exact. An off-the-shelf decimal crate would have to be read
+# against those clauses before it could be trusted, and the two obvious ones
+# answer differently: a fixed 96-bit mantissa cannot hold what §4.8 says must
+# cross a boundary, and an arbitrary-precision one brings its own rounding
+# vocabulary that is not `round`'s half-away-from-zero (§8.4).
+#
+# ➕ The arithmetic this language needs is NARROW — `+ − × ÷`, `round`, `abs`,
+# `min`/`max`, and an exact comparison — so it is written here against the
+# specification's own words and tested against them.
+#
+# ⚠ WHAT IS NOT WRITTEN BY HAND, and will need a dependency when §5 is built:
+# NFC normalisation and Unicode simple case folding (§5.1). Those are tables,
+# not arithmetic, and hand-rolling them would be absurd. **That decision is
+# deferred to when §5 is implemented, not pre-empted here.**
+[dependencies]
+
+[profile.release]
+# A 300 ms gate is measured on optimised code or it is not measured.
+opt-level = 3
+lto = true

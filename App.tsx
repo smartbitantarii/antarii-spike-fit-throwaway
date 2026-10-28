@@ -26,7 +26,7 @@ import {
 import { Harness, type Figure, type RunContext } from './src/harness/harness.ts';
 import { evaluate, plan } from './src/form/evaluate.ts';
 import type { Answers, FormDef } from './src/form/model.ts';
-import { SqlCipherStore, type OpenTimings } from './src/store/store.ts';
+import { SqlCipherStore, type OpenTimings, type VerifyOutcome } from './src/store/store.ts';
 import {
   defineQueueDrainTask,
   registerQueueDrain,
@@ -250,6 +250,19 @@ export default function App(): React.JSX.Element {
 
   const openTimingsRef = React.useRef<OpenTimings | null>(null);
   openTimingsRef.current = openTimings;
+
+  /**
+   * 🔴 ADR-003 §5.3.3a's OTHER HALF — the check that launch no longer waits for.
+   *
+   * Launch stopped verifying so it could meet `SwR-100`'s 2-second bound; the
+   * verification still has to happen, *"in full, once the UI is interactive"*.
+   * This state holds what it found, and `F-8`'s *do not serve* is driven off
+   * `store.isQuarantined()` rather than off this — *a store that could not run
+   * the check is not a store that failed it.*
+   */
+  const [verifyOutcome, setVerifyOutcome] = React.useState<VerifyOutcome | null>(null);
+  const verifyRef = React.useRef<VerifyOutcome | null>(null);
+  verifyRef.current = verifyOutcome;
 
   const store = React.useMemo(
     () =>
@@ -1043,6 +1056,11 @@ export default function App(): React.JSX.Element {
         // grew after this callback was last built would otherwise be delivered
         // as it was, and the states worth having are the late ones.
         bgMarksRef.current.length > 0 ? bgMarksRef.current : null,
+        // ⚠ Also from a ref. §5.3.3a's check finishes SECONDS after this
+        // callback was built, so a dependency here would deliver `null` for
+        // the one figure the decision moved — the exact defect that sent
+        // `openTimings: null` in every record on 2026-10-26.
+        verifyRef.current,
       );
       const json = stableJson(payload);
 
@@ -1250,6 +1268,42 @@ export default function App(): React.JSX.Element {
     };
   }, [harness, store]);
 
+  /**
+   * 🔴 ADR-003 §5.3.3a — VERIFY ONCE THE UI IS INTERACTIVE, NOT BEFORE.
+   *
+   * ⚠ **`[ready]` is the whole mechanism, and it is deliberate.** This effect
+   * cannot run until `ready` is true, and `ready` is set in the same tick the
+   * first screen renders — so *"once the UI is interactive"* is expressed as a
+   * dependency rather than as a timer nobody can verify. *A `setTimeout` would
+   * have been a guess at when the UI was ready.*
+   *
+   * ✕ **It is NOT `expo-background-task`.** §5.3.3a says *"in the background"*
+   * meaning **off the launch path**, not *"in an OS background window"* — and
+   * leg (i) has just established that an OS window may never come. *Verifying
+   * the store only when iOS felt like scheduling us would mean a store that is
+   * never verified.*
+   *
+   * ⚠ **AND THERE IS A WINDOW THIS CANNOT CLOSE, SAID RATHER THAN HIDDEN**: the
+   * first screen renders answers that were read BEFORE the check ran. `F-8`
+   * says *"nothing corrupt is ever served"*, and between `ready` and the
+   * check finishing, unverified data is on screen. **That is inherent in
+   * §5.3.3a's choice of timing over blocking, and the ADR does not mention
+   * it.** *Recorded as a follow-up rather than fixed here, because fixing it
+   * means either blocking again or showing a shell for 3.7 s.*
+   */
+  React.useEffect(() => {
+    if (!ready) return;
+    let live = true;
+    (async () => {
+      const outcome = await store.verify();
+      if (!live) return;
+      setVerifyOutcome(outcome);
+    })();
+    return () => {
+      live = false;
+    };
+  }, [ready, store]);
+
   const state = React.useMemo(() => evaluate(form, answers, order), [form, answers, order]);
 
   /**
@@ -1289,6 +1343,50 @@ export default function App(): React.JSX.Element {
       </ScrollView>
     );
   }
+  /**
+   * 🔴 `F-8`'s *START, DO NOT SERVE, TELL* — and the ORDER of these two blocks
+   * is the decision.
+   *
+   * This sits **after** `openFailure` and **before** `!ready`, because the two
+   * states are different things: `openFailure` is *the store never opened*,
+   * this is *the store opened and then failed verification*. ⚠ **The old code
+   * could only express the first**, since a failed check threw inside `open()`.
+   *
+   * ✅ *"The application starts"* — it did; we are rendering.
+   * ✅ *"It does NOT open the failed store for work"* — `store.isQuarantined()`
+   *    makes every read and write refuse, so this screen is not a polite
+   *    request to stop, it is the only thing left that works.
+   * ✅ *"The worker is told plainly… that their unsynchronised work is at
+   *    risk"* — in those terms, not in `cipher_integrity_check`'s.
+   *
+   * ⏳ **WHAT IS NOT HERE IS `F-8`'s OPEN HALF**: retry · export the raw file ·
+   * contact support · discard and re-synchronise. **Those wait on the salvage
+   * question** — *can anything be read from a file that fails the check?* —
+   * and inventing a button for one of them would pre-empt a decision.
+   */
+  if (store.isQuarantined()) {
+    return (
+      <ScrollView contentContainerStyle={styles.content}>
+        <Text style={styles.status}>This device’s data cannot be trusted.</Text>
+        <Text style={styles.note}>
+          The encrypted store on this phone failed its integrity check, which means part of
+          the file has been damaged. {'\n\n'}
+          🔴 Any work on this device that has not yet reached the office may be lost, and
+          nothing here can be opened or sent until it is sorted out.{'\n\n'}
+          Please contact support before using this device for more jobs.
+        </Text>
+        <Text selectable style={styles.note}>
+          {'\n'}For support: the integrity check reported{' '}
+          {verifyOutcome ? verifyOutcome.problems : '?'} problem(s).
+        </Text>
+        <Text style={styles.note}>
+          {'\n'}⏳ Retry, export and discard are deliberately absent — `F-8`’s remaining half
+          waits on whether anything can be salvaged from a file in this state.
+        </Text>
+      </ScrollView>
+    );
+  }
+
   if (!ready) return <Text style={styles.status}>opening the encrypted store…</Text>;
 
   /**
@@ -1376,9 +1474,11 @@ export default function App(): React.JSX.Element {
           <Text>{'Clear background marks'}</Text>
         </Pressable>
         {/*
-          🔴 STEP 1: pricing the launch. The ~3.1 s attributed to the integrity
-          check was read off the difference between two whole launches; these
-          are timers around the phases themselves.
+          ✅ STEP 1 IS DONE — these timers priced the launch, and ADR-003
+          §5.3.3a then moved the check out of it. What they now show is a
+          launch WITHOUT the check: `integrity` reads 0.0 unless an operator
+          has turned the inline path back on to reproduce an old figure.
+          ⏳ §5.3.3a still owes iOS three launches with the check toggled off.
         */}
         <Text style={styles.note}>
           {openTimings
@@ -1388,6 +1488,24 @@ export default function App(): React.JSX.Element {
               openTimings.schemaMs.toFixed(1) +
               (openTimings.integrityChecked ? '' : '  (CHECK OFF)')
             : 'store open: not measured yet'}
+        </Text>
+        {/*
+          🔴 §5.3.3a's FIGURE, WHICH IS NO LONGER PART OF THE OPEN. On an
+          ordinary launch `integrity` above reads 0.0 and the cost shows here
+          instead. ⚠ The two are NOT comparable — this one runs against a live
+          UI, the 3692 ms Android phase figure ran inside a cold open.
+        */}
+        <Text style={styles.note}>
+          {verifyOutcome
+            ? 'background verify ' + verifyOutcome.durationMs.toFixed(1) + ' ms — ' +
+              (verifyOutcome.error
+                ? 'COULD NOT RUN: ' + verifyOutcome.error
+                : verifyOutcome.ok
+                  ? 'clean'
+                  : 'FAILED, ' + verifyOutcome.problems + ' problem(s)')
+            : ready
+              ? 'background verify: running…'
+              : 'background verify: waiting for the UI'}
         </Text>
         <Pressable
           onPress={() => {
