@@ -101,10 +101,24 @@ const FILL_FILE = 'fill-state.txt';
  * opts INTO, persisted because the check happens during start-up and so cannot
  * be toggled by a running app.
  *
- * ⚠ ABSENT MEANS ON. A missing file, an unreadable one, or any value other
- * than the exact word `off` leaves the check running. *The check is axis 5 leg
- * (iv)'s own subject; a storage glitch must not quietly disable the thing the
- * axis exists to prove.*
+ * 🔴 ABSENT NOW MEANS **OFF** — ADR-003 §5.3.3a, carried here 2026-10-28.
+ *
+ * ✕ **IT MEANT *ON* UNTIL THEN, AND THAT DEFECT SURVIVED THE §5.3.3a CHANGE.**
+ * The store's constructor default was inverted to `false`, but **`App.tsx`
+ * passes this value explicitly**, so the launch kept running the check and the
+ * fix never reached the device at all — *then ran it a second time in
+ * `verify()`. The app crashed on launch, and this is half of why.*
+ *
+ * ⚠ **The old justification was the claim ADR-003 §7.1 records as FALSE**: the
+ * check as *"the cheapest proof the file really is keyed"*. It is not — the
+ * `PRAGMA key` and any read prove the keying. **So "a storage glitch must not
+ * quietly disable the thing the axis exists to prove" was protecting
+ * something the check never did**, at 3433 ms per launch.
+ *
+ * ✅ **What absent-means-off risks instead is benign**: an unreadable
+ * preference file leaves the check to `verify()`, which runs it **in full**
+ * anyway. *The detection is not lost; only its timing moves, which is exactly
+ * what §5.3.3a traded.*
  */
 const INTEGRITY_FILE = 'integrity-check.txt';
 
@@ -139,7 +153,9 @@ export function readCollectorBase(): string {
  * which the field says.
  */
 export function readIntegrityCheckOnOpen(): boolean {
-  return readSetting(INTEGRITY_FILE).toLowerCase() !== 'off';
+  // Only the exact word `on` turns the inline check back on; everything else —
+  // absent, unreadable, anything unexpected — leaves it to `verify()`.
+  return readSetting(INTEGRITY_FILE).toLowerCase() === 'on';
 }
 
 export async function saveIntegrityCheckOnOpen(on: boolean): Promise<void> {

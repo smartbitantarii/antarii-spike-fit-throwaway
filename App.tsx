@@ -264,6 +264,15 @@ export default function App(): React.JSX.Element {
   const verifyRef = React.useRef<VerifyOutcome | null>(null);
   verifyRef.current = verifyOutcome;
 
+  /**
+   * ⚠ Set once the seed-and-measure effect has let go of the connection, so
+   * the §5.3.3a verification does not fight the worklist for it. **It is not a
+   * readiness flag for the UI** — `ready` is that, and §5.3.3a's trigger is
+   * still the UI being interactive. *This only decides the order of two things
+   * that both happen after it.*
+   */
+  const [startupSettled, setStartupSettled] = React.useState(false);
+
   const store = React.useMemo(
     () =>
       new SqlCipherStore('spike.db', keystoreKeyProvider, openExpoDatabase, {
@@ -901,6 +910,11 @@ export default function App(): React.JSX.Element {
         if (live) {
           setCampaign('seeding the worklist failed: ' + (err instanceof Error ? err.message : String(err)));
         }
+      } finally {
+        // ⚠ `finally`, so a FAILED seed still releases §5.3.3a's verification.
+        // Gating it on success would mean a store that could not be measured
+        // was also never verified — the opposite of what F-8 wants.
+        if (live) setStartupSettled(true);
       }
     })();
     return () => {
@@ -1291,18 +1305,56 @@ export default function App(): React.JSX.Element {
    * it.** *Recorded as a follow-up rather than fixed here, because fixing it
    * means either blocking again or showing a shell for 3.7 s.*
    */
+  /**
+   * 🔴 THIS EFFECT CRASHED THE APP ON LAUNCH, 2026-10-28, AND THE FIX IS THREE
+   * THINGS. Recorded here because the first version looked obviously correct.
+   *
+   * **(1) IT HAD NO ERROR HANDLING, AND IT WAS THE ONLY STORE EFFECT IN THIS
+   * FILE WITHOUT ANY.** The worklist read thirty lines up carries `.catch`
+   * with the reason beside it — *"a failed read must not look like a slow
+   * one"* — and the seeding effect carries `try/catch`. ⚠ **In a release build
+   * `__DEV__` is false and an unhandled rejection terminates the process**, so
+   * a throw here did not surface as a message; it closed the app.
+   *
+   * **(2) IT CONTENDED FOR ONE CONNECTION.** Three effects fire on `ready` —
+   * the worklist read, the seed-and-measure, and this — and a full
+   * `cipher_integrity_check` over 1.6 GiB holds the handle for seconds while
+   * the others queue behind it. ✅ So it now waits for `startupSettled`.
+   *
+   * **(3) THE CHECK WAS RUNNING TWICE.** `readIntegrityCheckOnOpen` treated an
+   * absent preference as ON, so `open()` verified and then this verified
+   * again. *Fixed at the preference, which is where the defect was.*
+   *
+   * ⚠ **What is NOT claimed: that contention was provably the throw.** The
+   * crash log was not readable from this machine, so (2) is defensive — the
+   * cause established by reading is (1), which turns any throw at all into a
+   * process death. *Stated so a later reader does not take (2) as measured.*
+   */
   React.useEffect(() => {
-    if (!ready) return;
+    if (!ready || !startupSettled) return;
     let live = true;
-    (async () => {
-      const outcome = await store.verify();
-      if (!live) return;
-      setVerifyOutcome(outcome);
+    void (async () => {
+      try {
+        const outcome = await store.verify();
+        if (live) setVerifyOutcome(outcome);
+      } catch (err) {
+        // ⚠ Reported, never thrown onward. `verify()` already returns its
+        // outcome rather than throwing, so reaching here means the handle
+        // itself failed — which is a thing to say, not a thing to die of.
+        if (live) {
+          setVerifyOutcome({
+            ok: false,
+            durationMs: 0,
+            problems: 0,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
     })();
     return () => {
       live = false;
     };
-  }, [ready, store]);
+  }, [ready, startupSettled, store]);
 
   const state = React.useMemo(() => evaluate(form, answers, order), [form, answers, order]);
 
@@ -1503,9 +1555,11 @@ export default function App(): React.JSX.Element {
                 : verifyOutcome.ok
                   ? 'clean'
                   : 'FAILED, ' + verifyOutcome.problems + ' problem(s)')
-            : ready
-              ? 'background verify: running…'
-              : 'background verify: waiting for the UI'}
+            : !ready
+              ? 'background verify: waiting for the UI'
+              : !startupSettled
+                ? 'background verify: waiting for the worklist to settle'
+                : 'background verify: running…'}
         </Text>
         <Pressable
           onPress={() => {
