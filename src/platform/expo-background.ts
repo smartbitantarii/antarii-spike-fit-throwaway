@@ -17,8 +17,46 @@
  * ⚠ `SyR-210`'s rationale names iOS as the hard case for exactly this, which is
  * why it is measured there first.
  */
-import * as BackgroundTask from 'expo-background-task';
-import * as TaskManager from 'expo-task-manager';
+/**
+ * 🔴 `expo-background-task` AND `expo-task-manager` ARE REMOVED, 2026-10-28,
+ * AND THIS IS A RECORDED FINDING RATHER THAN A WORKAROUND.
+ *
+ * ✕ **What happened.** Registering the queue-drain task through
+ * `expo-background-task` left the Galaxy A35 in a state where **the
+ * application could not start at all**. The crash is Java-level, in
+ * `androidx.startup.InitializationProvider` during `handleBindApplication` —
+ * *before React Native loads and before a line of JavaScript runs*:
+ *
+ *     java.lang.RuntimeException: Unable to get provider
+ *       androidx.startup.InitializationProvider
+ *     Caused by: Failed to create an instance of
+ *       class androidx.work.impl.WorkDatabase
+ *       at androidx.work.WorkManagerInitializer.create(...)
+ *
+ * ✅ **Established from the artefacts, not inferred.** Three builds containing
+ * WorkManager crash identically; the pre-leg-(i) build runs fine on the same
+ * app data. `1496f8f` ran at 06:37 and **those identical bytes** crashed at
+ * 17:39 — `classes.dex` and `AndroidManifest.xml` sha256-identical across the
+ * builds that worked and failed. ✕ **Not storage** (79 GB free), ✕ **not stale
+ * dexopt** (forced recompile), ✕ **not a reboot**.
+ *
+ * ⚠ **THE ROOT CAUSE IS NOT KNOWN, and is deliberately not guessed here.** Why
+ * a fixed dex instantiates `WorkDatabase_Impl` one hour and not the next is
+ * unexplained. *It is an open question in the record, not a solved one.*
+ *
+ * ➕ **Why removal rather than a manifest patch.** The composition without
+ * these packages is the one **observed to run**, and it is also the
+ * composition the 2026-10-26 Android baseline figures were taken on — leg (i)
+ * landed two days later. *So removing them makes the launch figure MORE
+ * comparable with its baseline, not less.*
+ *
+ * ✅ **`probe()` below is untouched and still works**, because it only reads
+ * and writes the store. **Leg (i)'s foreground control survives**; what is
+ * lost is the scheduler-driven half, which on this device never ran anyway.
+ *
+ * ⓘ Restoring these is a one-line revert of this comment block plus
+ * `package.json` — kept narrow for exactly that reason.
+ */
 import { File, Paths } from 'expo-file-system';
 
 import type { EncryptedStore } from '../store/store.ts';
@@ -188,47 +226,35 @@ export async function probe(
  * task would be registered but undefined, which iOS reports as a task that did
  * nothing rather than as an error.
  */
-export function defineQueueDrainTask(makeStore: () => EncryptedStore): void {
-  if (TaskManager.isTaskDefined(TASK_NAME)) return;
-  TaskManager.defineTask(TASK_NAME, async () => {
-    try {
-      // The app may have been launched for this task alone, so a fresh store is
-      // opened rather than reusing one a screen might hold.
-      await probe('background-task', 'background', makeStore());
-    } catch (err) {
-      await appendMark({
-        at: new Date().toISOString(),
-        trigger: 'background-task',
-        appState: 'background',
-        storeOpened: false,
-        storeError: null,
-        queueRead: false,
-        queueDepth: null,
-        queueWritten: false,
-        error: 'task body threw: ' + (err instanceof Error ? err.message : String(err)),
-      });
-    }
-    return BackgroundTask.BackgroundTaskResult.Success;
-  });
+/**
+ * ⚠ A NO-OP SINCE 2026-10-28, and the signature is kept deliberately.
+ *
+ * `App.tsx` calls this at module scope, and the comment there explains why
+ * that matters. Keeping the shape means **nothing else had to change to make
+ * the application startable**, so the diff that bought a launch figure is this
+ * file and `package.json` and nothing more. *A smaller blast radius is worth
+ * more here than a tidier API.*
+ */
+export function defineQueueDrainTask(_makeStore: () => EncryptedStore): void {
+  // Nothing to define: there is no task runner in this build.
 }
 
+/**
+ * ⚠ Reports unavailability rather than pretending to register.
+ *
+ * ✕ **It does NOT return one of leg (i)'s verdicts**, and that is the point.
+ * The run plan's table offers *pass*, *framework/prototype failure* and
+ * *platform limit* — **all three assume the application runs**, so none of
+ * them describes a mechanism that stopped the app from starting. *Returning
+ * "restricted" or "platform limit" here would file this result under a cell it
+ * does not belong in, which is the class of defect `C1`, `C2` and `M5` were
+ * all caught being.*
+ */
 export async function registerQueueDrain(): Promise<string> {
-  try {
-    const status = await BackgroundTask.getStatusAsync();
-    if (status === BackgroundTask.BackgroundTaskStatus.Restricted) {
-      // ⚠ Reported, not swallowed: "the user has background refresh off" and
-      // "the platform refuses" are different findings for leg (i), and only one
-      // of them is about the platform.
-      return 'restricted — background execution is disabled for this app or device';
-    }
-    const already = await TaskManager.isTaskRegisteredAsync(TASK_NAME);
-    if (!already) {
-      // ⚠ 15 minutes is the floor iOS honours; it is a REQUEST, not a promise.
-      // The scheduler decides, which is the very thing being measured.
-      await BackgroundTask.registerTaskAsync(TASK_NAME, { minimumInterval: 15 });
-    }
-    return 'registered (minimum interval 15 min — the scheduler decides)';
-  } catch (err) {
-    return 'registration failed: ' + (err instanceof Error ? err.message : String(err));
-  }
+  return (
+    'UNAVAILABLE — expo-background-task removed 2026-10-28 after it left the ' +
+    'application unable to start (see this file\'s header). Task "' +
+    TASK_NAME +
+    '" is not registered, and this is NOT a leg (i) verdict.'
+  );
 }
