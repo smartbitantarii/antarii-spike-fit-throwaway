@@ -183,6 +183,34 @@ jobs:
             exit 1
           fi
 
+      # 🔴 THE EVALUATOR'S TESTS, WHICH RAN NOWHERE UNTIL 2026-10-28.
+      #
+      # ADR-005 §4.4a's evaluator landed with 19 passing tests and `cargo`
+      # appeared nowhere in this file, so a push that broke them went green.
+      # ⚠ That is the piece of the spike MOST able to change an ADR — if it
+      # misses `SwR-066`'s 300 ms, ADR-005 moves — and it was the only piece
+      # with no automated check.
+      #
+      # PINNED EXACTLY, for this file's own stated reason: a floating label
+      # "would change the toolchain OVERNIGHT, and figures taken either side of
+      # it would not be comparable". `stable` is a floating label.
+      #
+      # ⓘ 1.99.1 was current stable on 2026-10-28, released 2026-10-13 — read
+      # from `static.rust-lang.org/dist/channel-rust-stable.toml`. It matches
+      # `antarii-dev-env/toolchain/Dockerfile`, and the two must move together.
+      - name: pin the Rust toolchain
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --no-self-update
+          rustup default 1.99.1
+          rustc --version
+
+      # ✕ `--locked`, so a drifted `Cargo.lock` fails rather than being
+      # silently updated — the same discipline as `npm ci` above. The crate
+      # has no dependencies today, which is exactly when the habit is free to
+      # adopt: §5's Unicode normalisation will need one.
+      - name: test the evaluator
+        run: cargo test --locked --manifest-path evaluator/Cargo.toml
+
   # ===========================================================================
   # Android. NO OWNER SECRETS NEEDED.
   # ===========================================================================
