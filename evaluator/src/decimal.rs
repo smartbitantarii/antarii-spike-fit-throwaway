@@ -45,6 +45,38 @@ impl Decimal {
         self.scale
     }
 
+    /// An exact decimal from an **unscaled** integer and a scale, so
+    /// `from_i64(5, 2)` is `0.05` and `from_i64(5, 0)` is `5`.
+    ///
+    /// ➕ Used where the language produces a **count** rather than a
+    /// measurement, all of which pass scale 0 — §6's day and minute
+    /// differences, §8.2's `count`, and checkbox-as-0/1 (§8's operand list).
+    ///
+    /// ⓘ *This is the scaled-integer form §4.8 declines for TRANSMISSION, and
+    /// the reason does not apply here: the scale is an argument rather than
+    /// something that has to survive a boundary.*
+    ///
+    /// ⚠ **Not `From<f64>`, and there will never be one.** §4.1 forbids binary
+    /// floating point "as a representation at every stage", so a constructor
+    /// taking one would be a hole straight through the rule.
+    pub fn from_i64(v: i64, scale: u32) -> Self {
+        let neg = v < 0;
+        // `unsigned_abs` so i64::MIN does not overflow on negation.
+        let mut n = v.unsigned_abs();
+        let mut digits = Vec::new();
+        if n == 0 {
+            return Decimal::zero(scale);
+        }
+        while n > 0 {
+            digits.push((n % 10) as u8);
+            n /= 10;
+        }
+        digits.reverse();
+        let mut d = Decimal { neg, digits, scale };
+        d.trim_leading();
+        d
+    }
+
     pub fn is_zero(&self) -> bool {
         self.digits.is_empty()
     }

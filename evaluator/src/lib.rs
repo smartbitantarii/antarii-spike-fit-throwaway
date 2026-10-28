@@ -17,7 +17,252 @@
 //! proves is **conformance**; the figure needs the device, a cross-compile and
 //! ADR-003 §4.6's hosting — *which is the part nobody has exercised yet.*
 
+pub mod datetime;
 pub mod decimal;
+pub mod value;
+
+#[cfg(test)]
+mod datetime_tests {
+    use super::datetime::*;
+
+    fn d(y: i32, m: u8, dd: u8) -> CivilDate {
+        CivilDate::new(y, m, dd).expect("a real date")
+    }
+    fn t(h: u8, mi: u8, s: u8) -> CivilTime {
+        CivilTime::new(h, mi, s).expect("a real time")
+    }
+
+    #[test]
+    fn an_impossible_date_is_refused_rather_than_normalised() {
+        // ⚠ Rolling 31 February forward to 3 March would make a designer's
+        // mistake invisible, and nothing in §6 licenses it.
+        assert!(CivilDate::new(2026, 2, 30).is_none());
+        assert!(CivilDate::new(2026, 13, 1).is_none());
+        assert!(CivilDate::new(2026, 0, 1).is_none());
+        assert!(CivilDate::new(2026, 1, 0).is_none());
+        assert!(CivilTime::new(24, 0, 0).is_none());
+        assert!(CivilTime::new(0, 60, 0).is_none());
+        // and the leap year that catches the naive rule
+        assert!(CivilDate::new(2024, 2, 29).is_some());
+        assert!(CivilDate::new(2100, 2, 29).is_none(), "2100 is not a leap year");
+        assert!(CivilDate::new(2000, 2, 29).is_some(), "2000 is");
+    }
+
+    #[test]
+    fn date_difference_is_a_minus_b_so_overdue_is_positive() {
+        // §6.3: "the reading that makes 'due date − today' positive while
+        // overdue, which is SwR-164's built-in first rule".
+        let due = d(2026, 10, 20);
+        let today = d(2026, 10, 28);
+        // today is past due, so due − today is negative; the rule the
+        // specification names is `today − due` being positive when overdue.
+        assert_eq!(date_difference(today, due).to_string(), "8");
+        assert_eq!(date_difference(due, today).to_string(), "-8");
+    }
+
+    #[test]
+    fn date_difference_counts_calendar_days_across_a_month_and_a_year() {
+        assert_eq!(date_difference(d(2026, 3, 1), d(2026, 2, 28)).to_string(), "1");
+        assert_eq!(date_difference(d(2024, 3, 1), d(2024, 2, 28)).to_string(), "2");
+        assert_eq!(date_difference(d(2027, 1, 1), d(2026, 12, 31)).to_string(), "1");
+        assert_eq!(date_difference(d(2026, 1, 1), d(2025, 1, 1)).to_string(), "365");
+        assert_eq!(date_difference(d(2025, 1, 1), d(2024, 1, 1)).to_string(), "366");
+    }
+
+    #[test]
+    fn a_daylight_saving_day_counts_as_one_day() {
+        // 🔴 §6.3's decisive case. In the United Kingdom clocks went back on
+        // 2026-10-25, making that day 25 hours long. §6.3: "a daylight-saving
+        // day counts as one day", and "the alternative makes a 23-hour day
+        // arithmetically zero days, which no designer intends".
+        //
+        // ✅ It holds BY CONSTRUCTION here, because civil dates carry no
+        // offset — which is the argument for taking already-zoned values.
+        assert_eq!(date_difference(d(2026, 10, 26), d(2026, 10, 25)).to_string(), "1");
+        assert_eq!(date_difference(d(2026, 3, 30), d(2026, 3, 29)).to_string(), "1");
+    }
+
+    #[test]
+    fn date_and_time_difference_are_not_interconvertible_and_that_is_by_design() {
+        // §6.3: "24 × date difference ≠ time difference / 60 across a DST
+        // boundary, by design". The two operators answer different questions,
+        // and this asserts the shapes rather than the equality.
+        let one_day = date_difference(d(2026, 10, 26), d(2026, 10, 25));
+        assert_eq!(one_day.to_string(), "1");
+        // A time difference is within a day and never carries a date, so there
+        // is no quantity here to convert in the first place.
+        assert_eq!(time_difference(t(23, 0, 0), t(1, 0, 0)).to_string(), "1320");
+    }
+
+    #[test]
+    fn time_difference_is_minutes_truncated_toward_zero() {
+        // §6.3: "a 90-second difference is 1 or 2" — it is 1, because
+        // truncation toward zero is not rounding.
+        assert_eq!(time_difference(t(10, 1, 30), t(10, 0, 0)).to_string(), "1");
+        assert_eq!(time_difference(t(10, 0, 0), t(10, 1, 30)).to_string(), "-1");
+        assert_eq!(time_difference(t(10, 0, 59), t(10, 0, 0)).to_string(), "0");
+        assert_eq!(time_difference(t(10, 0, 0), t(10, 0, 59)).to_string(), "0");
+        assert_eq!(time_difference(t(12, 30, 0), t(10, 0, 0)).to_string(), "150");
+    }
+
+    #[test]
+    fn truncation_toward_zero_is_not_half_away_from_zero() {
+        // ⚠ The clause this guards: "an implicit rounding inside another
+        // operator would be a second rounding behaviour, which §4.5 refused".
+        // 30 seconds is half a minute, and `round` would make it 1 / −1.
+        assert_eq!(time_difference(t(10, 0, 30), t(10, 0, 0)).to_string(), "0");
+        assert_eq!(time_difference(t(10, 0, 0), t(10, 0, 30)).to_string(), "0");
+    }
+
+    #[test]
+    fn between_includes_both_endpoints() {
+        // §6.4, decided inclusive so that `between(min, max)` and
+        // `not is out of range` cannot disagree at the boundary (§7.5).
+        assert!(between_ord(d(2026, 1, 1), d(2026, 1, 1), d(2026, 1, 31)));
+        assert!(between_ord(d(2026, 1, 31), d(2026, 1, 1), d(2026, 1, 31)));
+        assert!(!between_ord(d(2025, 12, 31), d(2026, 1, 1), d(2026, 1, 31)));
+        assert!(between_ord(t(9, 0, 0), t(9, 0, 0), t(17, 0, 0)));
+        assert!(between_ord(t(17, 0, 0), t(9, 0, 0), t(17, 0, 0)));
+    }
+
+    #[test]
+    fn between_over_numbers_uses_the_exact_comparison() {
+        use super::decimal::Decimal;
+        let v = |s: &str| Decimal::parse(s).unwrap();
+        assert!(between_number(&v("10"), &v("10"), &v("20")));
+        assert!(between_number(&v("20.0000"), &v("10"), &v("20")));
+        assert!(!between_number(&v("20.0001"), &v("10"), &v("20")));
+        assert!(between_number(&v("10.0000"), &v("10"), &v("20")));
+    }
+
+    #[test]
+    fn endpoints_the_wrong_way_round_are_false_not_swapped() {
+        // ⚠ Swapping would hide a designer's mistake, and §6.4 does not
+        // license reinterpreting the operands.
+        assert!(!between_ord(d(2026, 1, 15), d(2026, 1, 31), d(2026, 1, 1)));
+    }
+
+    #[test]
+    fn the_day_number_is_right_at_the_epoch_and_before_it() {
+        // The algorithm is the load-bearing part of every difference above, so
+        // it is checked against known values rather than only against itself.
+        assert_eq!(d(1970, 1, 1).to_days(), 0);
+        assert_eq!(d(1969, 12, 31).to_days(), -1);
+        assert_eq!(d(2000, 1, 1).to_days(), 10_957);
+        assert_eq!(d(2026, 10, 28).to_days(), 20_754);
+    }
+}
+
+#[cfg(test)]
+mod value_tests {
+    use super::datetime::CivilDate;
+    use super::decimal::Decimal;
+    use super::value::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn no_value_is_neither_an_error_nor_zero() {
+        // §3.3, and SwR-068's "yields no value (never zero)".
+        assert!(!Value::NoValue.is_answered());
+        assert_ne!(Value::NoValue, Value::Number(Decimal::parse("0").unwrap()));
+        assert!(Value::NoValue.as_expression_number().is_none());
+        // ✅ And zero IS answered, which is the other half of the same clause.
+        assert!(Value::Number(Decimal::parse("0").unwrap()).is_answered());
+    }
+
+    #[test]
+    fn a_checkbox_is_zero_or_one_in_an_expression_but_not_a_number_elsewhere() {
+        // §8's operand list: "checkbox as 0/1". §7.1 gives it `is checked`
+        // only, so it is a distinct variant rather than a Number.
+        assert_eq!(
+            Value::Checkbox(true).as_expression_number().unwrap().to_string(),
+            "1"
+        );
+        assert_eq!(
+            Value::Checkbox(false).as_expression_number().unwrap().to_string(),
+            "0"
+        );
+        assert!(Value::Checkbox(false).is_answered(), "false is an answer");
+    }
+
+    #[test]
+    fn a_hidden_field_counts_as_unanswered_to_everything_that_reads_it() {
+        // §3.4 — "shall not be required, validated, or used as an input to
+        // calculations (it counts as unanswered)".
+        let mut f = Field::answered(Value::Number(Decimal::parse("42").unwrap()));
+        f.hidden = true;
+        assert_eq!(f.effective(Shape::InProgressOnDevice), Value::NoValue);
+        assert_eq!(f.effective(Shape::SubmittedRecord), Value::NoValue);
+    }
+
+    #[test]
+    fn but_the_device_keeps_the_value_while_the_record_does_not() {
+        // 🔴 §3.4a, and ADR-005 §8.3 dimension 9. The device keeps it,
+        // "restored if re-shown"; the submitted record holds "not applicable
+        // with no value". **Two shapes of one instance, not a divergence.**
+        let mut f = Field::answered(Value::Number(Decimal::parse("42").unwrap()));
+        f.hidden = true;
+        assert_eq!(
+            f.recorded(Shape::InProgressOnDevice),
+            Value::Number(Decimal::parse("42").unwrap()),
+            "the device keeps it for restoration"
+        );
+        assert_eq!(
+            f.recorded(Shape::SubmittedRecord),
+            Value::NoValue,
+            "the submitted record does not"
+        );
+    }
+
+    #[test]
+    fn a_choice_identifier_is_compared_exactly_with_no_normalisation() {
+        // §5.2 — a choice option identifier is "a stable key compared
+        // exactly", explicitly outside §5.1's trimming, folding and collapsing.
+        // ✅ Which is why these work before §5 exists.
+        assert_ne!(ChoiceId("opt-a".into()), ChoiceId("OPT-A".into()));
+        assert_ne!(ChoiceId("opt-a".into()), ChoiceId(" opt-a ".into()));
+        assert_eq!(ChoiceId("opt-a".into()), ChoiceId("opt-a".into()));
+    }
+
+    #[test]
+    fn a_multi_select_is_a_set_so_order_and_duplicates_cannot_be_observed() {
+        // §7.6 makes `equals` set equality on a multi-select, and §11.2 wants
+        // set comparison to mean something.
+        let a: BTreeSet<ChoiceId> =
+            ["x", "y"].iter().map(|s| ChoiceId(s.to_string())).collect();
+        let b: BTreeSet<ChoiceId> =
+            ["y", "x", "y"].iter().map(|s| ChoiceId(s.to_string())).collect();
+        assert_eq!(Value::ChoiceSet(a), Value::ChoiceSet(b));
+    }
+
+    #[test]
+    fn an_empty_multi_select_is_not_the_same_as_unanswered() {
+        // ⚠ A distinction nothing in §3 states, and the types must pick one.
+        // An empty set is an ANSWER of "none of them"; NoValue is no answer.
+        // *Flagged in F-11's company if the corpus later disagrees.*
+        let empty = Value::ChoiceSet(BTreeSet::new());
+        assert_ne!(empty, Value::NoValue);
+        assert!(empty.is_answered());
+    }
+
+    #[test]
+    fn media_carries_no_content_because_has_evidence_is_its_only_operator() {
+        // §7.1 gives media exactly one operator. Holding a filename would
+        // invite a text comparison the palette does not offer.
+        assert!(Value::Media { present: true }.is_answered());
+        assert!(Value::NoValue.as_expression_number().is_none());
+    }
+
+    #[test]
+    fn a_date_is_a_value_and_not_a_number() {
+        let v = Value::Date(CivilDate::new(2026, 10, 28).unwrap());
+        assert!(v.is_answered());
+        assert!(
+            v.as_expression_number().is_none(),
+            "§8's operand list admits dates via date difference, never as bare numbers"
+        );
+    }
+}
 
 #[cfg(test)]
 mod decimal_tests {
