@@ -27,6 +27,14 @@ import { Harness, type Figure, type RunContext } from './src/harness/harness.ts'
 import { evaluate, plan } from './src/form/evaluate.ts';
 import type { Answers, FormDef } from './src/form/model.ts';
 import { SqlCipherStore, type OpenTimings } from './src/store/store.ts';
+import {
+  defineQueueDrainTask,
+  registerQueueDrain,
+  readMarks,
+  clearMarks,
+  probe as probeBackground,
+  type BackgroundMark,
+} from './src/platform/expo-background.ts';
 import { buildFill, clearFill, measureFill } from './src/platform/expo-fill.ts';
 import { describeFill, fillState, type FillState } from './src/store/fill.ts';
 import { Queue } from './src/queue/queue.ts';
@@ -106,6 +114,26 @@ const TENANT_DEFAULT_PROFILE: Profile = 'standard';
  * that is a trap for the next edit, and this constant is not per-render anyway.
  */
 const NAV_TIMEOUT_MS = 10_000;
+
+/**
+ * 🔴 CONDITION 5 LEG (i): THE TASK IS DEFINED AT MODULE SCOPE, BEFORE ANY RENDER.
+ *
+ * iOS may launch the app **directly into the background** to run a registered
+ * task. ⚠ A definition that only happened inside a component would not exist
+ * yet at that moment — the task would be registered but undefined, and iOS
+ * reports that as a task that **did nothing**, not as an error. *The leg would
+ * then read as "the platform does not permit it" when the truth was that we
+ * never defined the work.*
+ *
+ * ➕ It builds its own store rather than taking the screen's: the app may have
+ * been launched for this task alone, with no screen at all.
+ */
+defineQueueDrainTask(
+  () =>
+    new SqlCipherStore('spike.db', keystoreKeyProvider, openExpoDatabase, {
+      now: () => performance.now(),
+    }),
+);
 
 /**
  * `S2`'s variants. ➕ NAMED RATHER THAN BOOLEAN because there are now three and
@@ -867,6 +895,55 @@ export default function App(): React.JSX.Element {
     };
   }, [ready, store, worklist]);
 
+  /**
+   * Condition 5 leg (i). ⚠ The marks are READ on every launch, because the
+   * states that matter most — suspended, terminated — leave evidence behind
+   * rather than reporting live. *Reading them only on a button press would mean
+   * the operator had to know to look.*
+   */
+  const [bgMarks, setBgMarks] = React.useState<BackgroundMark[]>([]);
+  const [bgStatus, setBgStatus] = React.useState('background task: not registered');
+  const bgMarksRef = React.useRef<BackgroundMark[]>([]);
+  bgMarksRef.current = bgMarks;
+
+  React.useEffect(() => {
+    let live = true;
+    void (async () => {
+      const status = await registerQueueDrain();
+      const marks = await readMarks();
+      if (!live) return;
+      setBgStatus('background task: ' + status);
+      setBgMarks(marks);
+    })();
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  /**
+   * ➕ THE FOREGROUND CONTROL, AND IT IS NOT A FORMALITY. If the store cannot be
+   * opened from a background task, that result means nothing unless the same
+   * code opens it fine in the foreground — otherwise the finding is "our probe
+   * is broken", not "the platform refuses".
+   */
+  const onProbeForeground = React.useCallback(async () => {
+    const fresh = new SqlCipherStore('spike.db', keystoreKeyProvider, openExpoDatabase, {
+      now: () => performance.now(),
+    });
+    const m = await probeBackground('foreground-probe', 'active', fresh);
+    setBgMarks(await readMarks());
+    setBgStatus(
+      'foreground probe: store ' + (m.storeOpened ? 'opened' : 'REFUSED — ' + m.storeError) +
+        ', read ' + m.queueRead + ', write ' + m.queueWritten,
+    );
+  }, []);
+
+  const onClearMarks = React.useCallback(async () => {
+    await clearMarks();
+    setBgMarks([]);
+    setBgStatus('background marks cleared');
+  }, []);
+
   const refreshFill = React.useCallback(async () => {
     setFillState(await measureFill(store));
   }, [store]);
@@ -962,6 +1039,10 @@ export default function App(): React.JSX.Element {
         isCampaign && campaignFigures!.some((f) => f.seq === 'S2') ? lastVariant.current : null,
         fillRef.current,
         openTimingsRef.current,
+        // ⚠ From the ref, for the reason `openTimings` is: a marks array that
+        // grew after this callback was last built would otherwise be delivered
+        // as it was, and the states worth having are the late ones.
+        bgMarksRef.current.length > 0 ? bgMarksRef.current : null,
       );
       const json = stableJson(payload);
 
@@ -1260,6 +1341,40 @@ export default function App(): React.JSX.Element {
           yet, whatever its margin.
         */}
         <Text style={styles.note}>{describeFill(fillMeasured)}</Text>
+        {/*
+          🔴 CONDITION 5 LEG (i). The marks are the evidence; this line is only
+          a view of them. Four of the five states leg (i) names — background,
+          suspended, terminated, locked — have no screen to watch, so the
+          record is left behind and read on the next launch.
+        */}
+        <Text style={styles.note}>{bgStatus}</Text>
+        <Text style={styles.note}>
+          {bgMarks.length === 0
+            ? 'background marks: none yet'
+            : 'background marks: ' + bgMarks.length + ' — last ' +
+              (() => {
+                const m = bgMarks[bgMarks.length - 1]!;
+                return m.at.slice(11, 19) + ' ' + m.trigger +
+                  ' store=' + (m.storeOpened ? 'open' : 'REFUSED') +
+                  ' read=' + m.queueRead + ' write=' + m.queueWritten;
+              })()}
+        </Text>
+        <Pressable
+          onPress={() => { void onProbeForeground(); }}
+          disabled={fillBusy || busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>{'Probe the queue now (foreground control)'}</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => { void onClearMarks(); }}
+          disabled={fillBusy || busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>{'Clear background marks'}</Text>
+        </Pressable>
         {/*
           🔴 STEP 1: pricing the launch. The ~3.1 s attributed to the integrity
           check was read off the difference between two whole launches; these

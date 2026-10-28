@@ -416,6 +416,35 @@ export interface DevicePayload {
    * for one taken with it.
    */
   openTimings: OpenTimingsRecord | null;
+  /**
+   * 🔴 CONDITION 5 LEG (i)'s EVIDENCE — every mark the queue probe left behind.
+   *
+   * Leg (i) fails when *"the queue cannot be read or written in any state in
+   * which `SwR-107` requires work to continue — foreground, background,
+   * suspended, terminated, device locked"*. ⚠ **Four of those five states have
+   * no screen to watch**, and in one of them the application does not exist, so
+   * the evidence is written to a plain file as it happens and carried here on
+   * the next delivery.
+   *
+   * ✕ These are **not a figure**. There is no number to meet: `SyR-076` says
+   * background synchronisation continues *"within what the device platform
+   * permits, **with no separate figure**"*. What they record is **which states
+   * the platform permitted**, which is the whole of leg (i)'s question.
+   */
+  backgroundMarks: BackgroundMarkRecord[] | null;
+}
+
+/** Mirrors `src/platform/expo-background.ts`'s `BackgroundMark`. */
+export interface BackgroundMarkRecord {
+  at: string;
+  trigger: string;
+  appState: string;
+  storeOpened: boolean;
+  storeError: string | null;
+  queueRead: boolean;
+  queueDepth: number | null;
+  queueWritten: boolean;
+  error: string | null;
 }
 
 /** Mirrors `src/store/store.ts`'s `OpenTimings`, so `report.ts` imports no store code. */
@@ -459,6 +488,7 @@ export function devicePayload(
   variant: { name: string; note: string } | null = null,
   fillStateRecord: FillStateRecord | null = null,
   openTimings: OpenTimingsRecord | null = null,
+  backgroundMarks: BackgroundMarkRecord[] | null = null,
 ): DevicePayload {
   return {
     kind,
@@ -475,5 +505,6 @@ export function devicePayload(
     variant,
     fillState: fillStateRecord,
     openTimings,
+    backgroundMarks,
   };
 }
