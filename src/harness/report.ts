@@ -485,6 +485,35 @@ export interface DevicePayload {
    * and §5.3.3a's decision does not depend on the two matching.*
    */
   verify: VerifyOutcomeRecord | null;
+  /**
+   * 🔴 CONDITION 4's EVIDENCE — every capability probe this session ran.
+   *
+   * The narrowed spike collapses condition 4 from five separate probes into
+   * one integration question: *does the app still build and start with
+   * everything it needs installed, and do the routes work in OUR
+   * configuration?* ✕ **Documentation answers "can React Native reach a
+   * camera"; it cannot answer "alongside SQLCipher on Expo SDK 58 with
+   * prebuild, on these two handsets"** — and `F-12` is two-day-old proof that
+   * the difference is not theoretical.
+   *
+   * ⚠ **These are NOT figures.** There is no number and no target: a probe
+   * reports whether a route exists, and `SB-009` makes a missing route a
+   * *not established* rather than a failure where the hardware is absent.
+   *
+   * ➕ **Every entry carries its own `notProven`**, because a route that exists
+   * is routinely read as covering things it never touched — *"the camera
+   * works" taken to mean `SwR-086` compression and `SwR-102` stamping are
+   * proven, which no probe here establishes.*
+   */
+  probes: ProbeRecord[] | null;
+}
+
+/** Mirrors `src/media/capability.ts`'s `ProbeResult`. */
+export interface ProbeRecord {
+  capability: string;
+  verdict: string;
+  detail: string;
+  notProven: string;
 }
 
 /** Mirrors `src/store/store.ts`'s `VerifyOutcome`, so `report.ts` imports no store code. */
@@ -551,6 +580,7 @@ export function devicePayload(
   openTimings: OpenTimingsRecord | null = null,
   backgroundMarks: BackgroundMarkRecord[] | null = null,
   verify: VerifyOutcomeRecord | null = null,
+  probes: ProbeRecord[] | null = null,
 ): DevicePayload {
   return {
     kind,
@@ -578,5 +608,9 @@ export function devicePayload(
     openTimings,
     backgroundMarks,
     verify,
+    // ⚠ An EMPTY array becomes null, so "no probes were run" and "probes were
+    // run and found nothing" cannot be confused in the record. *The same
+    // distinction `backgroundMarks` makes above, for the same reason.*
+    probes: probes && probes.length > 0 ? probes : null,
   };
 }

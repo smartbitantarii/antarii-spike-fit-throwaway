@@ -36,6 +36,12 @@ import {
   type BackgroundMark,
 } from './src/platform/expo-background.ts';
 import { buildFill, clearFill, measureFill } from './src/platform/expo-fill.ts';
+// ---- condition 4's probes (SC-03, SC-04, SC-10) ----
+import { CameraView } from 'expo-camera';
+import { SignaturePad } from './src/ui/signature-pad.tsx';
+import { probeVideo } from './src/platform/expo-capability.ts';
+import { judgeScannedCode, type ProbeResult } from './src/media/capability.ts';
+import { probeHosting, probeDecimalBoundary } from './modules/antarii-evaluator/index.ts';
 import { describeFill, fillState, type FillState } from './src/store/fill.ts';
 import { Queue } from './src/queue/queue.ts';
 import { keystoreKeyProvider, openExpoDatabase } from './src/platform/expo-adapters.ts';
@@ -55,7 +61,7 @@ import {
   discardCapture,
   type CaptureResult,
 } from './src/platform/expo-media.ts';
-import { devicePayload, stableJson } from './src/harness/report.ts';
+import { devicePayload, stableJson, type ProbeRecord } from './src/harness/report.ts';
 import { runCampaign, ITERATIONS } from './src/harness/campaign.ts';
 import { SEQUENCES, stepsForRecord } from './src/harness/sequences.ts';
 import { deliver } from './src/harness/delivery.ts';
@@ -222,6 +228,24 @@ export default function App(): React.JSX.Element {
   const [integrityPref, setIntegrityPref] = React.useState(integrityCheckOnOpen);
   /** Review finding `C1` — the run condition, declared and persisted. */
   const [offlinePref, setOfflinePref] = React.useState<boolean | null>(() => readOffline());
+
+  /**
+   * Condition 4's verdicts, accumulated across taps.
+   *
+   * ⚠ A REF BESIDE THE STATE, for the reason `openTimingsRef` exists: the
+   * delivery callback is rebuilt on its own dependencies, and a probe appended
+   * after it was last built would otherwise be delivered as absent. *That
+   * defect sent `openTimings: null` in every record for five days.*
+   */
+  const [probes, setProbes] = React.useState<ProbeRecord[]>([]);
+  const probesRef = React.useRef<ProbeRecord[]>([]);
+  probesRef.current = probes;
+  const addProbe = React.useCallback((r: ProbeRecord | ProbeResult) => {
+    // The two shapes are identical by construction; `report.ts` keeps its own
+    // copy of the type so it imports no capability code.
+    setProbes((prev) => [...prev, r as ProbeRecord]);
+  }, []);
+  const [scanning, setScanning] = React.useState(false);
   const [openTimings, setOpenTimings] = React.useState<OpenTimings | null>(null);
 
   /**
@@ -1092,6 +1116,9 @@ export default function App(): React.JSX.Element {
         // the one figure the decision moved — the exact defect that sent
         // `openTimings: null` in every record on 2026-10-26.
         verifyRef.current,
+        // ⚠ From the ref, for the reason every other late value is: probes are
+        // appended by taps after this callback was last built.
+        probesRef.current,
       );
       const json = stableJson(payload);
 
@@ -1586,6 +1613,105 @@ export default function App(): React.JSX.Element {
           ⚠ The operator is declaring it, so the phone must actually be in
           that state — `SwR-092` wants barcode/QR proven OFFLINE.
         */}
+
+        {/*
+          🔴 CONDITION 4's PROBE PANEL — the only thing Build A is for.
+          Each button runs one route and appends a verdict; Deliver carries
+          them. ⚠ A route that EXISTS is not a requirement met, which is why
+          every verdict shows its own `notProven` beside it.
+        */}
+        <Text style={styles.note}>
+          {'\n'}— condition 4: capability probes ({probes.length} run) —
+        </Text>
+        <Pressable
+          onPress={() => {
+            // ✅ Synchronous and cannot fail: if the library is absent this
+            // reports `not-hosted` rather than throwing. The whole SC-10
+            // question answered by one tap.
+            const r = probeHosting();
+            addProbe({
+              capability: 'Rust library hosted (SC-10)',
+              verdict: r.verdict,
+              detail: r.detail,
+              notProven: r.notProven,
+            });
+            const d = probeDecimalBoundary();
+            if (d) {
+              addProbe({
+                capability: 'decimal string across the boundary (§4.8)',
+                verdict: d.verdict,
+                detail: d.detail,
+                notProven: d.notProven,
+              });
+            } else {
+              // ⚠ Expected on Android — JNI strings were deliberately not
+              // built. Recorded as *not established*, never as a pass.
+              addProbe({
+                capability: 'decimal string across the boundary (§4.8)',
+                verdict: 'not-established',
+                detail: 'the platform offers no string entry point (Android: JNI strings not built)',
+                notProven: 'marshalling on this platform — see jni.rs',
+              });
+            }
+          }}
+          disabled={busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>Probe: is the Rust library hosted?</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => {
+            void (async () => {
+              setBusy(true);
+              try {
+                addProbe(await probeVideo());
+              } finally {
+                setBusy(false);
+              }
+            })();
+          }}
+          disabled={busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>Probe: video capture</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => setScanning((s) => !s)}
+          disabled={busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>{scanning ? 'Close the scanner' : 'Probe: barcode / QR (SwR-092)'}</Text>
+        </Pressable>
+        {scanning ? (
+          <CameraView
+            style={{ height: 260, marginVertical: 8 }}
+            // ⚠ The symbologies are NAMED rather than left to the default.
+            // A default set is a set nobody recorded, and the record must be
+            // able to say which codes were asked for.
+            barcodeScannerSettings={{ barcodeTypes: ['qr', 'ean13', 'code128'] }}
+            onBarcodeScanned={(e) => {
+              // ✅ Closed on the first hit, so one tap gives one verdict —
+              // the callback otherwise fires continuously while a code is in
+              // frame and would append dozens of identical probes.
+              setScanning(false);
+              addProbe(judgeScannedCode(e, runContext.offline));
+            }}
+          />
+        ) : null}
+        <Text style={styles.note}>
+          Probe: signature (SyR-089) — draw below, then lift
+        </Text>
+        <SignaturePad profile={profile} onResult={addProbe} />
+        {probes.length > 0 ? (
+          <Text selectable style={styles.note}>
+            {probes
+              .map((p) => `${p.verdict.toUpperCase()}  ${p.capability}\n   ${p.detail}\n   not proven: ${p.notProven}`)
+              .join('\n')}
+          </Text>
+        ) : null}
         <Pressable
           onPress={() => {
             const next = offlinePref === null ? true : offlinePref ? false : null;

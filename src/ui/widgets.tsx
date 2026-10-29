@@ -21,7 +21,7 @@ import { Text, TextInput, Pressable, View } from 'react-native';
 
 import type { FieldDef, FieldState, Value } from '../form/model.ts';
 import { TOKENS, statusPresentation, type Profile, type StatusKind } from './profile.ts';
-import { present } from './presentation.ts';
+import { present, accessibleFieldLabel } from './presentation.ts';
 
 // ---------------------------------------------------------------- status line
 
@@ -126,6 +126,26 @@ export function FieldWidget(props: WidgetProps): React.JSX.Element {
     : null;
   const { t } = useBox(profile, field);
 
+  /**
+   * 🔴 `SC-06` — WHAT A SCREEN READER HEARS WHEN THE CONTROL TAKES FOCUS.
+   *
+   * ⚠ Not `field.label` alone, which is what all seven branches said until
+   * now. The visible `StatusLine` nodes below announce *required* and
+   * *invalid* in text — `SwR-053` and `SyR-221`'s *"status never by colour
+   * alone"* — **but they are SIBLINGS of the control inside a container
+   * marked `accessible={false}`**, so a worker moving between controls with
+   * TalkBack or VoiceOver hears the label and never reaches them.
+   *
+   * ➕ Two channels for two audiences, not duplication: the sighted worker
+   * reads the line, the screen-reader user hears the label. *Remove either and
+   * one audience loses the rule outcome.*
+   */
+  const a11yLabel = accessibleFieldLabel(field.label, {
+    required: state.required,
+    valid: state.valid,
+    message: state.message,
+  });
+
   const label = (
     <Text style={{ fontSize: t.labelDp, color: t.text, marginBottom: 4 }}>
       {field.label}
@@ -143,7 +163,7 @@ export function FieldWidget(props: WidgetProps): React.JSX.Element {
             style={[controlStyle(profile, state.valid), { fontSize: t.valueDp, color: t.text }]}
             defaultValue={String(value ?? '')}
             onBlur={(e) => onCommit(field.id, e.nativeEvent.text)}
-            accessibilityLabel={field.label}
+            accessibilityLabel={a11yLabel}
           />
         );
 
@@ -157,7 +177,7 @@ export function FieldWidget(props: WidgetProps): React.JSX.Element {
             keyboardType="numeric"
             defaultValue={String(value ?? '')}
             onBlur={(e) => onCommit(field.id, e.nativeEvent.text)}
-            accessibilityLabel={field.label}
+            accessibilityLabel={a11yLabel}
           />
         );
 
@@ -170,7 +190,7 @@ export function FieldWidget(props: WidgetProps): React.JSX.Element {
             style={controlStyle(profile, state.valid)}
             onPress={() => onCommit(field.id, new Date().toISOString().slice(0, 10))}
             accessibilityRole="button"
-            accessibilityLabel={field.label}
+            accessibilityLabel={a11yLabel}
           >
             <Text style={{ fontSize: t.valueDp, color: t.text }}>
               {String(value ?? 'Choose a date')}
@@ -186,7 +206,7 @@ export function FieldWidget(props: WidgetProps): React.JSX.Element {
             style={controlStyle(profile, state.valid)}
             onPress={() => onCommit(field.id, next)}
             accessibilityRole="button"
-            accessibilityLabel={field.label}
+            accessibilityLabel={a11yLabel}
           >
             <Text style={{ fontSize: t.valueDp, color: t.text }}>
               {String(value ?? 'Choose one')}
@@ -205,7 +225,7 @@ export function FieldWidget(props: WidgetProps): React.JSX.Element {
               style={controlStyle(profile, state.valid)}
               onPress={() => onCommit(field.id, SPIKE_OPTIONS.join(','))}
               accessibilityRole="button"
-              accessibilityLabel={field.label}
+              accessibilityLabel={a11yLabel}
             >
               <Text style={{ fontSize: t.valueDp, color: t.text }}>Choose any</Text>
             </Pressable>
@@ -227,7 +247,7 @@ export function FieldWidget(props: WidgetProps): React.JSX.Element {
             onPress={() => onCommit(field.id, on ? 'false' : 'true')}
             accessibilityRole="checkbox"
             accessibilityState={{ checked: on }}
-            accessibilityLabel={field.label}
+            accessibilityLabel={a11yLabel}
           >
             {/* The box is a square at the touch floor less its padding, so the
                 tappable area and the visible control are the same thing. */}
@@ -261,7 +281,7 @@ export function FieldWidget(props: WidgetProps): React.JSX.Element {
               style={controlStyle(profile, state.valid)}
               onPress={() => onCommit(field.id, 'captured')}
               accessibilityRole="button"
-              accessibilityLabel={field.label}
+              accessibilityLabel={a11yLabel}
             >
               <Text style={{ fontSize: t.valueDp, color: t.text }}>Capture</Text>
             </Pressable>

@@ -320,3 +320,26 @@ test('🔴 M4/C1: both keys are PRESENT in the serialised record even when unset
   assert.equal(back.offline, null);
   assert.equal(back.commit, null);
 });
+
+// ---------------------------------------- condition 4's probe evidence (SC-04/10)
+
+test('probes land in the record, each carrying what it did not prove', () => {
+  const ctx = { buildId: 'N', device: 'x', fill: 'none', offline: true };
+  const p = devicePayload('incidental-marks', ctx, [figure()], undefined, undefined,
+    null, null, null, null, null, null, null, [
+      { capability: 'video capture', verdict: 'route-exists', detail: '3s', notProven: 'SwR-086' },
+    ]);
+  assert.equal(p.probes?.length, 1);
+  assert.equal(p.probes?.[0]?.verdict, 'route-exists');
+  assert.match(p.probes![0]!.notProven, /SwR-086/);
+});
+
+test('🔴 no probes run is NULL, not an empty array', () => {
+  // "nothing was run" and "something ran and found nothing" are different
+  // facts, and an empty array reads as the second.
+  const ctx = { buildId: 'N', device: 'x', fill: 'none', offline: true };
+  assert.equal(devicePayload('campaign', ctx, [figure()]).probes, null);
+  const empty = devicePayload('campaign', ctx, [figure()], undefined, undefined,
+    null, null, null, null, null, null, null, []);
+  assert.equal(empty.probes, null, 'an empty array must normalise to null');
+});

@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import { spikeForm, USED_TYPES, DENSE_FIELD_COUNT } from '../form/spike-form.ts';
 import { TOKENS, PROFILES, type Profile } from './profile.ts';
 import {
+  accessibleFieldLabel,
   present,
   allPresentations,
   fieldsPerScreen,
@@ -222,4 +223,59 @@ test("the cost table, for §8's record — printed, not asserted", () => {
 
   // The one thing asserted here: the table was actually produced.
   assert.ok(lines.length > 10);
+});
+
+// ----------------------------------------- SC-06: the screen-reader label
+
+test('SwR-053: a screen reader hears the rule outcome, not just the label', () => {
+  // 🔴 The gap this closes: the visible StatusLine is a SIBLING node, so a
+  // worker moving between controls never lands on it. The control's own
+  // label has to carry the outcome.
+  assert.equal(
+    accessibleFieldLabel('Meter reading', { required: true, valid: false, message: 'must be 0 to 100' }),
+    'Meter reading, required, invalid, must be 0 to 100',
+  );
+});
+
+test('a valid field announces nothing it has not earned', () => {
+  assert.equal(
+    accessibleFieldLabel('Notes', { required: false, valid: true }),
+    'Notes',
+  );
+  assert.equal(
+    accessibleFieldLabel('Notes', { required: true, valid: true }),
+    'Notes, required',
+  );
+});
+
+test('⚠ a message on a VALID field is not announced as a failure', () => {
+  // Guidance is not a rule outcome. Reading "invalid" beside it would
+  // announce a failure that has not happened.
+  assert.equal(
+    accessibleFieldLabel('Serial', { required: false, valid: true, message: 'format: AB-1234' }),
+    'Serial',
+  );
+});
+
+test('an empty or whitespace message does not leave a dangling comma', () => {
+  assert.equal(
+    accessibleFieldLabel('Reading', { required: false, valid: false, message: '   ' }),
+    'Reading, invalid',
+  );
+  assert.equal(
+    accessibleFieldLabel('Reading', { required: false, valid: false, message: null }),
+    'Reading, invalid',
+  );
+  assert.equal(
+    accessibleFieldLabel('Reading', { required: false, valid: false }),
+    'Reading, invalid',
+  );
+});
+
+test('the order is identity, then requiredness, then failure, then why', () => {
+  // A reader hears what it is before what is wrong with it — the order a
+  // sighted worker reads the same column in.
+  const s = accessibleFieldLabel('X', { required: true, valid: false, message: 'why' });
+  const parts = s.split(', ');
+  assert.deepEqual(parts, ['X', 'required', 'invalid', 'why']);
 });

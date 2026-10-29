@@ -234,3 +234,61 @@ export function repeatingPresentation(
   if (designerOverridesFallback) return 'grid';
   return gridMinWidthDp(columns, profile) <= availableWidthDp ? 'grid' : 'cards';
 }
+
+// ------------------------------------- SC-06: what a screen reader is told
+//
+// 🔴 THE GAP THIS CLOSES, which is not the one the plan expected.
+//
+// `widgets.tsx` already announces required and invalid IN TEXT — `StatusLine`
+// exists precisely so `SwR-053`'s "a rule outcome is announced in text" and
+// `SyR-221` Field's "status never by colour alone" are honoured. ✅ That part
+// was done.
+//
+// ✕ What was NOT done is BINDING that status to the control. The field's
+// container is `accessible={false}` and the status lines are sibling `Text`
+// nodes, so a worker moving between CONTROLS with TalkBack or VoiceOver hears
+// `field.label` and nothing else — **the invalid status is a separate focus
+// stop they may never land on**. A sighted worker sees the line; a screen
+// reader user does not hear it.
+//
+// ➕ So the control's own label carries the state. ⚠ This is NOT duplication
+// of the visible status line: they are two channels for two audiences, and
+// removing either leaves one audience without the rule outcome.
+//
+// ⚠ AND IT IS STILL NOT CONDITION 3. Brief §5 row 3 asks for "TalkBack and
+// VoiceOver" and "a manual audit of the spike form" ON A DEVICE. This makes
+// the audit able to pass; it does not perform it. *Review finding `M5` was
+// that 26 token tests had been read as condition 3 being "substantially
+// done" — this is design-time preparation, and says so.*
+
+/** The field state a screen-reader label needs, narrowed to what it reads. */
+export interface AnnouncedState {
+  required: boolean;
+  valid: boolean;
+  /** `SwR-051`'s translatable message, where a rule produced one. */
+  message?: string | null;
+}
+
+/**
+ * What TalkBack or VoiceOver says when the control itself takes focus.
+ *
+ * ➕ Order is deliberate: **label, then requiredness, then the failure, then
+ * why.** A reader hears the identity first and the problem before the detail,
+ * which is the order a sighted worker reads the same column in.
+ */
+export function accessibleFieldLabel(
+  label: string,
+  state: AnnouncedState,
+): string {
+  const parts: string[] = [label];
+  if (state.required) parts.push('required');
+  if (!state.valid) {
+    parts.push('invalid');
+    // ⚠ The message is appended only when the field is INVALID. A message on a
+    // valid field is guidance, and reading "invalid" beside it would announce
+    // a failure that has not happened.
+    const m = state.message;
+    if (typeof m === 'string' && m.trim().length > 0) parts.push(m.trim());
+  }
+  return parts.join(', ');
+}
