@@ -347,13 +347,31 @@ export interface DevicePayload {
    * recorded under `S1`'s name would be compared against `S1`'s 300 ms
    * target, which binds a different thing entirely.
    *
-   * ⚠ So it travels as its own observation with **no target and no
-   * pass/fail**, because **`SwR-100` binds five interactions and launch is
-   * not among them** — opening a form, moving between fields and saving an
-   * answer under 300 ms, the job or form list under 1 second, and a
-   * captured photograph. *Whether launch should be bound at all is an
-   * open question for the owner; until it is answered, reporting a number
-   * without a verdict is the only honest shape.*
+   * 🔴 **BUT THE REASON GIVEN HERE WENT STALE ON 2026-10-27, AND THIS COMMENT
+   * WAS STILL ASSERTING IT TWO DAYS LATER.** It read: *"`SwR-100` binds five
+   * interactions and launch is not among them"*, and *"whether launch should
+   * be bound at all is an open question for the owner"*.
+   *
+   * ✕ **Both sentences are now false.** `SwR-100` was amended **2026-10-27 in
+   * one controlled pass, on the owner's decision closing `F-1`** and gained a
+   * **fourth figure**, in the requirement's own words: ***"opening the
+   * application in under 2 seconds … including opening the encrypted store and
+   * whatever it verifies on open"*** (SRS v1.5, `SyR-088` likewise at SyRS
+   * v1.14). **The open question was answered, and launch is bound.**
+   *
+   * ⚠ **THIS COMMENT CAUSED A REAL CORRECTION TO BE MADE THE WRONG WAY ROUND.**
+   * On 2026-10-29 a session read it, concluded that a measured 281 ms "does
+   * not pass" because no bound exists, and reported three other places in this
+   * codebase as wrong for saying it does. **The three were right and this was
+   * wrong** — *a code comment was read as authoritative over the SRS and SyRS
+   * baselines, which are the only things that bind.*
+   *
+   * ✅ **WHAT REMAINS TRUE is the first half**: a cold start is **not a
+   * sequence**, so it has no row in `TARGET_MS` and cannot — that table is
+   * keyed by `SeqId`, and M7 drives sequences. ⚠ **So the fourth figure has no
+   * representation in this harness at all**: the number travels without a
+   * verdict not because none exists, but because nothing here can express one.
+   * *That is a gap, recorded as such, and no longer a justification.*
    */
   coldStartMs: number | null;
   /**
