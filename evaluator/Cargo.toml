@@ -23,6 +23,13 @@ description = "ADR-005 §4.4a's ONE evaluator, for spike conditions 6 and 7. Dis
 # NFC normalisation and Unicode simple case folding (§5.1). Those are tables,
 # not arithmetic, and hand-rolling them would be absurd. **That decision is
 # deferred to when §5 is implemented, not pre-empted here.**
+[lib]
+# 🔴 `staticlib` for `SC-10`: the hosting probe links this into the Android and
+# iOS native modules, which need a static archive rather than a Rust rlib.
+# `rlib` stays so `cargo test` still works — *a crate that could only be
+# cross-compiled could not be tested on a development machine.*
+crate-type = ["staticlib", "rlib"]
+
 [dependencies]
 
 [profile.release]

@@ -73,7 +73,82 @@
 
 pub mod datetime;
 pub mod decimal;
+/// `SC-10`'s C boundary. ⚠ Added AFTER the freeze and permitted by it: the
+/// freeze forbids **extending** the evaluator's specification coverage, and
+/// this adds none — it puts a boundary around what already exists, because
+/// §4.8 names *"JavaScript ↔ the native library on the device"* as a boundary
+/// a decimal must cross as a string.
+pub mod ffi;
 pub mod value;
+
+#[cfg(test)]
+mod ffi_tests {
+    use super::ffi::*;
+    use std::ffi::{CStr, CString};
+
+    #[test]
+    fn the_linkage_probe_cannot_panic_even_at_the_limits() {
+        // ➕ `wrapping_add`, so a debug build does not abort on overflow — a
+        // probe that panics cannot be told from a library that failed to load.
+        assert_eq!(antarii_probe_add(2, 3), 5);
+        assert_eq!(antarii_probe_add(-1, 1), 0);
+        assert_eq!(antarii_probe_add(i64::MAX, 1), i64::MIN);
+        assert_eq!(antarii_probe_add(i64::MIN, -1), i64::MAX);
+    }
+
+    #[test]
+    fn the_decimal_contract_survives_a_round_trip_with_its_scale() {
+        // §4.8: the scale is carried by the digits present, so doubling a
+        // 2-place value must come back with 2 places — not tidied to 1.
+        assert_eq!(double_decimal("1.50").unwrap(), "3.00");
+        assert_eq!(double_decimal("0.05").unwrap(), "0.10");
+        assert_eq!(double_decimal("-2.5").unwrap(), "-5.0");
+        assert_eq!(double_decimal("0").unwrap(), "0");
+        // and a width no fixed mantissa would hold
+        assert_eq!(
+            double_decimal("123456789012345678901234567890").unwrap(),
+            "246913578024691357802469135780"
+        );
+    }
+
+    #[test]
+    fn a_value_this_boundary_does_not_accept_is_a_result_not_a_crash() {
+        // ⚠ §4.8's form only. An exponent is how a binary float prints itself,
+        // and admitting it would be the representation §4.1 forbids.
+        for bad in ["1e5", "", ".5", "1.", "abc", "1,5"] {
+            assert!(double_decimal(bad).is_none(), "{bad} must be refused");
+        }
+    }
+
+    #[test]
+    fn the_c_boundary_round_trips_and_frees_without_leaking_ownership() {
+        // The whole contract in one test: in as C, out as C, freed by the
+        // allocator that allocated — never by the host's `free()`.
+        let input = CString::new("12.3456").expect("no interior NUL");
+        unsafe {
+            let out = antarii_probe_double_decimal(input.as_ptr());
+            assert!(!out.is_null(), "a valid decimal must produce a string");
+            let got = CStr::from_ptr(out).to_str().expect("valid UTF-8 out");
+            assert_eq!(got, "24.6912");
+            antarii_probe_free(out);
+            // ✅ Freeing null is defined and harmless, which the host relies on
+            // when the previous call returned null.
+            antarii_probe_free(std::ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn null_in_is_null_out_rather_than_undefined_behaviour() {
+        unsafe {
+            assert!(antarii_probe_double_decimal(std::ptr::null()).is_null());
+        }
+        // And a refused value returns null too, so the host has one check.
+        let bad = CString::new("1e5").unwrap();
+        unsafe {
+            assert!(antarii_probe_double_decimal(bad.as_ptr()).is_null());
+        }
+    }
+}
 
 #[cfg(test)]
 mod datetime_tests {

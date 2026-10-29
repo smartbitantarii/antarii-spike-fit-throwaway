@@ -11,6 +11,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  judgeScannedCode,
   judgeSignatureStroke,
   judgeVideoAsset,
   NOT_PROBED_TODAY,
@@ -114,4 +115,49 @@ test('what is NOT probed today is enumerated rather than left silent', () => {
     assert.ok(n.reason.length > 20, 'each exclusion carries a real reason');
   }
   assert.match(NOT_PROBED_TODAY[1]!.reason, /O2/);
+});
+
+// ------------------------------------------- SC-04: barcode and QR (SwR-092)
+
+test('a decoded code is a route that exists', () => {
+  const r = judgeScannedCode({ type: 'qr', data: 'ANTARII-TEST-1' }, true);
+  assert.equal(r.verdict, 'route-exists');
+  assert.match(r.detail, /type qr/);
+  assert.match(r.detail, /14 characters/);
+  assert.match(r.detail, /declared OFFLINE/);
+});
+
+test('🔴 a type with no data is DETECTED, not decoded — and must not pass', () => {
+  // The trap: a camera that sees something barcode-shaped it cannot read
+  // still reports a type. Accepting type alone banks a pass on nothing.
+  const r = judgeScannedCode({ type: 'code128' }, true);
+  assert.equal(r.verdict, 'refused');
+  assert.match(r.detail, /detected, not decoded/);
+});
+
+test('an empty decode is kept distinct from no report at all', () => {
+  // Two different facts: the scanner ran and got nothing, versus never ran.
+  assert.equal(judgeScannedCode({ type: 'qr', data: '' }, true).verdict, 'refused');
+  assert.equal(judgeScannedCode(null, true).verdict, 'no-route');
+  assert.equal(judgeScannedCode(undefined, true).verdict, 'no-route');
+});
+
+test('⚠ the run condition rides in the detail and NEVER changes the verdict', () => {
+  // SwR-092 wants offline. An offline declaration strengthens what a scan
+  // proves; it cannot turn a non-scan into one, and an unset condition cannot
+  // turn a real scan into a failure.
+  const code = { type: 'qr', data: 'X' };
+  for (const cond of [true, false, null]) {
+    assert.equal(judgeScannedCode(code, cond).verdict, 'route-exists');
+  }
+  assert.match(judgeScannedCode(code, false).detail, /SwR-092 asks for offline/);
+  assert.match(judgeScannedCode(code, null).detail, /NOT ESTABLISHED/);
+  // and a failure stays a failure however the condition is declared
+  assert.equal(judgeScannedCode({ type: 'qr' }, true).verdict, 'refused');
+});
+
+test('what a scan does not prove is stated in its own record', () => {
+  const r = judgeScannedCode({ type: 'qr', data: 'X' }, true);
+  assert.match(r.notProven, /SwR-092/);
+  assert.match(r.notProven, /SwR-104/);
 });

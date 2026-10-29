@@ -31,6 +31,13 @@
         }
       ],
       [
+        "expo-camera",
+        {
+          "cameraPermission": "The spike scans a barcode and a QR code, which SwR-092 requires offline.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
         "expo-build-properties",
         {
           "android": {

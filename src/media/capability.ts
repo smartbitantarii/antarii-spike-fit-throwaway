@@ -56,6 +56,20 @@ export interface ProbeResult {
   notProven: string;
 }
 
+/**
+ * 🔴 WHAT A SCAN DOES *NOT* ESTABLISH, and the first item is the point of the
+ * probe rather than a caveat on it.
+ *
+ * `SwR-092` requires barcode and QR scanning **offline**, and a camera-based
+ * scan is local by construction — ⚠ **but "local by construction" is reasoning,
+ * not evidence.** The record carries the operator's declared run condition
+ * (`offline`, review finding `C1`), and a scan taken with that unset proves
+ * the route and **not** the requirement.
+ */
+const BARCODE_NOT_PROVEN =
+  'offline operation unless the record says offline (SwR-092), the symbologies a ' +
+  'tenant actually uses, SwR-104 type-in fallback, scan reliability at distance or angle';
+
 const VIDEO_NOT_PROVEN =
   'duration limits (SwR-078), compression (SwR-086), stamping (SwR-102), size (SyR-082)';
 const SIGNATURE_NOT_PROVEN =
@@ -173,6 +187,83 @@ export function judgeSignatureStroke(
     verdict: 'route-exists',
     detail: `${points.length} points over a ${w}x${h} box`,
     notProven: SIGNATURE_NOT_PROVEN,
+  };
+}
+
+/** What `expo-camera` hands `onBarcodeScanned`, narrowed to what a verdict needs. */
+export interface ScannedCode {
+  type?: string | null;
+  data?: string | null;
+}
+
+/**
+ * `SwR-092`'s **barcode and QR scanning, offline** — judged from what the
+ * scanner reported.
+ *
+ * 🔴 **`data` IS THE DISCRIMINATOR, NOT `type`**, and the reason is the same
+ * class of trap as video's: **a camera that detects a symbol it cannot decode
+ * still reports a `type`.** *Accepting `type` alone would bank a pass on
+ * "something barcode-shaped was in frame", which is not scanning.*
+ *
+ * ⚠ **An empty string is a decode failure, not a scan**, and is kept distinct
+ * from a missing field — the first means the scanner ran and got nothing, the
+ * second that it never reported.
+ *
+ * ➕ **`runCondition` is passed in rather than read here** so this stays pure
+ * and testable off a device *(the boundary `expo-media.ts` states: judgements
+ * import nothing platform-specific)*. ✕ **And it is NOT allowed to upgrade the
+ * verdict** — an offline declaration strengthens what the scan proves, and a
+ * scan that did not happen proves nothing either way.
+ */
+export function judgeScannedCode(
+  code: ScannedCode | null | undefined,
+  runCondition: boolean | null,
+): ProbeResult {
+  const capability = 'barcode and QR scanning (SwR-092)';
+  // ⚠ The offline claim rides in the detail, never in the verdict.
+  const condition =
+    runCondition === true
+      ? 'operator declared OFFLINE'
+      : runCondition === false
+        ? 'operator declared online — SwR-092 asks for offline'
+        : 'run condition NOT ESTABLISHED (C1)';
+
+  if (!code) {
+    return {
+      capability,
+      verdict: 'no-route',
+      detail: 'the scanner reported nothing — no callback fired',
+      notProven: BARCODE_NOT_PROVEN,
+    };
+  }
+  const data = code.data;
+  if (typeof data !== 'string') {
+    return {
+      capability,
+      verdict: 'refused',
+      detail:
+        `a code of type ${code.type ?? 'unknown'} was reported with no data field ` +
+        `— detected, not decoded (${condition})`,
+      notProven: BARCODE_NOT_PROVEN,
+    };
+  }
+  if (data.length === 0) {
+    return {
+      capability,
+      verdict: 'refused',
+      detail:
+        `a code of type ${code.type ?? 'unknown'} decoded to an empty string ` +
+        `(${condition})`,
+      notProven: BARCODE_NOT_PROVEN,
+    };
+  }
+  return {
+    capability,
+    verdict: 'route-exists',
+    detail:
+      `type ${code.type ?? 'unreported'}, ${data.length} characters decoded ` +
+      `(${condition})`,
+    notProven: BARCODE_NOT_PROVEN,
   };
 }
 
