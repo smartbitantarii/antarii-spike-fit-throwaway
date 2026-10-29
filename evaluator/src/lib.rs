@@ -17,6 +17,60 @@
 //! proves is **conformance**; the figure needs the device, a cross-compile and
 //! ADR-003 §4.6's hosting — *which is the part nobody has exercised yet.*
 
+// ===========================================================================
+// 🔴 FROZEN 2026-10-29 — A CORRECTNESS REFERENCE, NOT THE PROBE.
+//
+// *(Author's recommendation on the owner's go ahead. The owner named no
+// option, so the attribution convention applies.)*
+//
+// `decimal`, `value` and `datetime` are **complete for what they cover and
+// will not be extended**. §§5, 7–11 are deliberately NOT written here.
+//
+// ---------------------------------------------------------------------------
+// WHY, IN THE BRIEF'S OWN WORDS.
+//
+// Brief §2: *"The spike's code is throwaway and lives outside the
+// repositories… **what returns from it is numbers and a record, not code**…
+// If a pattern from the spike is worth keeping, it is **re-written** in the
+// client repository when construction starts."*
+//
+// ✕ **And `SB-019` named this exact artefact**: *"on a yes, ADR-012 §10.8
+// rule 1 puts that one evaluator implementation in the shared front-end
+// package — **so the artefact thrown away is precisely the thing someone then
+// writes again, properly**."*
+//
+// 🔴 **This was written properly the first time, in the tree that gets thrown
+// away.** Arbitrary-precision arithmetic, canonical boundary forms, exactness
+// to thirty digits — all correct, none of it what the spike was asked for.
+// *The question is "can this arithmetic hit 300 ms on a mid-range phone",
+// which needs arithmetic that is REPRESENTATIVE, not arithmetic that is RIGHT.*
+//
+// ✅ **IT HAS EARNED ITS KEEP, AND THAT IS WHY IT IS FROZEN RATHER THAN
+// DELETED.** It produced exactly what the brief asks a spike to return — a
+// record: **`F-11`'s three specification gaps**, none of which was visible
+// from reading the specification, and all three of which are free to fix now
+// and cost a version increment plus a floor wait later (§13.2).
+//
+// ---------------------------------------------------------------------------
+// WHAT REPLACES IT, AND WHAT IT MUST MEASURE.
+//
+// `O5` option (a): *"a throwaway evaluator whose arithmetic is **explicitly
+// sized to those clauses**, and say so in the record"* — sized to `SwR-032`'s
+// four tiers and `SwR-019`'s twelve record fields. ✕ **Not option (d)**,
+// *"a simpler evaluator… would return a number that passes and means
+// nothing"*.
+//
+// ⚠ **AND IT MUST BE MEASURED ACROSS THE JS↔NATIVE BOUNDARY, which the corpus
+// asks for in terms.** Specification §4.8: *"parsing and formatting a string
+// per value per re-evaluation is real work against `SwR-066`'s 300 ms… it
+// needs no separate experiment: **condition 6 measures exactly this**."*
+// *A figure taken inside Rust alone would miss the cost the corpus flagged.*
+//
+// 🔴 **NEITHER CAN RUN UNTIL HOSTING EXISTS.** Nothing has run Rust inside
+// this client; the earlier Go→WebAssembly attempt was reverted. **Re-scoping
+// makes the code smaller and does not touch that blocker.**
+// ===========================================================================
+
 pub mod datetime;
 pub mod decimal;
 pub mod value;
