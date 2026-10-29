@@ -335,6 +335,37 @@ jobs:
           cd android
           ./gradlew :app:assembleRelease --no-daemon
 
+      # 🔴 DID THE LIBRARY ACTUALLY GET INTO THE APK? ASK THE APK, NOT THE LOG.
+      #
+      # The cross-compile step says `OK arm64-v8a` when it has written a file
+      # into `jniLibs`. ✕ **That is a statement about a directory, not about
+      # the package** — autolinking, the module's `build.gradle`, ABI splits
+      # and packaging options all sit between the two, and every one of them
+      # could drop the library while the build stays green.
+      #
+      # ⚠ *Build A's whole lesson is that "green" and "shipped" are different
+      # claims. This step is the one that makes them the same claim for the
+      # thing the hosting probe is about.* A missing library here is a
+      # PACKAGING defect and must fail — the probe's `not-hosted` verdict is
+      # reserved for a handset that cannot load a library that IS present.
+      - name: assert the evaluator shipped inside the APK
+        run: |
+          APK=$(find android -name '*.apk' -path '*release*' | head -1)
+          [ -n "$APK" ] || { echo "FATAL: no release APK found" >&2; exit 1; }
+          echo "APK: $APK"
+          echo "=== native libraries in the package ==="
+          unzip -l "$APK" | grep -E '^\s+[0-9]+.*lib/' || echo "(none)"
+          if ! unzip -l "$APK" | grep -q 'lib/arm64-v8a/libantarii_evaluator.so'; then
+            echo "FATAL: libantarii_evaluator.so is NOT in the APK for" >&2
+            echo "       arm64-v8a, which is the Galaxy A35's ABI." >&2
+            echo "       The cross-compile wrote it into jniLibs and" >&2
+            echo "       something between there and packaging dropped it." >&2
+            echo "       ✕ Do NOT read the probe's not-hosted verdict as an" >&2
+            echo "         answer about Rust — the library never shipped." >&2
+            exit 1
+          fi
+          echo "OK: the evaluator is in the package for arm64-v8a"
+
       - name: record what this artefact is
         run: |
           mkdir -p artefact
@@ -622,19 +653,50 @@ jobs:
           # certificate. The profile name is safe and is the useful half.
           echo "profile: $PROFILE_NAME"
 
-      # ➕ The scheme is DISCOVERED, not assumed. `expo prebuild` names the
-      # Xcode project after the app, and hard-coding a guessed name is the
-      # kind of thing that fails on the first run for no good reason.
+      # ➕ The workspace is DISCOVERED — `expo prebuild` names the Xcode
+      # project after the app, and a guessed filename fails for no good reason.
+      #
+      # 🔴 BUT THE SCHEME IS NO LONGER "WHICHEVER COMES FIRST", AND THAT COST
+      # A BUILD. This step used to take `head -1` of the scheme list. That was
+      # fine while the app was the only scheme — and `SC-10` added a second
+      # one. The local Expo module's pod is called **`AntariiEvaluator`**,
+      # which sorts BEFORE `AntariiSpike`, so the run archived **the Rust
+      # module's pod instead of the application**. Xcode said so in its own
+      # words — *"Supported platforms for the buildables in the current scheme
+      # is empty"* — and then `-exportArchive` failed with
+      # `expected one {} but found ad-hoc`: ⚠ **an EMPTY set of valid
+      # distribution methods, because a pod archive has no app to distribute.**
+      #
+      # ⚠ *So the `ad-hoc` complaint is most likely a SYMPTOM of this bug
+      # rather than a second one, and it is deliberately not "fixed" by
+      # guessing a renamed method value. The archive's own type is printed
+      # below; if `ad-hoc` is genuinely rejected by Xcode 26 the next failure
+      # will say so with a NON-empty set, which is evidence rather than a
+      # guess.*
+      #
+      # ➕ The scheme is now derived from the WORKSPACE NAME, which is the
+      # application's by construction, and asserted to exist. *A build that
+      # archives the wrong target is worse than one that does not run.*
       - name: find the workspace and scheme
         run: |
           WS=$(find ios -maxdepth 1 -name '*.xcworkspace' | head -1)
           [ -n "$WS" ] || { echo "no .xcworkspace after prebuild" >&2; exit 1; }
+          APP=$(basename "$WS" .xcworkspace)
+          echo "=== every scheme in $WS ==="
+          xcodebuild -workspace "$WS" -list | sed -n '/Schemes:/,$p'
           SCHEME=$(xcodebuild -workspace "$WS" -list \
-            | awk '/Schemes:/{f=1;next} f&&NF{print $1; exit}')
-          [ -n "$SCHEME" ] || { echo "no scheme in $WS" >&2; exit 1; }
+            | sed -n '/Schemes:/,$p' | tail -n +2 \
+            | awk -v a="$APP" 'NF && $1==a {print $1; exit}')
+          if [ -z "$SCHEME" ]; then
+            echo "FATAL: no scheme named '$APP' in $WS" >&2
+            echo "       the app scheme is the workspace's own name; if that" >&2
+            echo "       changed, this assertion is the thing to update — NOT" >&2
+            echo "       a fallback to whichever scheme happens to be first." >&2
+            exit 1
+          fi
           echo "WS=$WS" >> "$GITHUB_ENV"
           echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
-          echo "workspace=$WS scheme=$SCHEME"
+          echo "workspace=$WS scheme=$SCHEME (app=$APP)"
 
       - name: archive (Release)
         run: |
@@ -647,6 +709,33 @@ jobs:
             PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
             CODE_SIGN_IDENTITY="$SIGN_ID" \
             archive
+
+      # 🔴 SAY WHAT THE ARCHIVE ACTUALLY CONTAINS, BEFORE TRYING TO EXPORT IT.
+      #
+      # The previous run archived the Rust module's pod and the only hint was
+      # an export error about the `method` key — which read as "the plist is
+      # wrong" when the truth was "there is no application in here". ⚠ *The
+      # same mistake as Build A: a step that cannot distinguish "the thing is
+      # broken" from "the thing is absent".*
+      #
+      # ➕ `ApplicationProperties` exists only in an APP archive, so its
+      # absence is the diagnosis, printed before the failure rather than
+      # inferred after it.
+      - name: say what the archive is
+        run: |
+          PLIST="$RUNNER_TEMP/spike.xcarchive/Info.plist"
+          [ -f "$PLIST" ] || { echo "FATAL: no archive at $PLIST" >&2; exit 1; }
+          echo "=== archive Info.plist ==="
+          /usr/libexec/PlistBuddy -c 'Print' "$PLIST" | head -40
+          if ! /usr/libexec/PlistBuddy -c 'Print :ApplicationProperties' "$PLIST" >/dev/null 2>&1; then
+            echo "FATAL: this archive has no ApplicationProperties, so it is" >&2
+            echo "       NOT an application archive — the wrong scheme was" >&2
+            echo "       built. Exporting it would fail with a misleading" >&2
+            echo "       complaint about the export plist." >&2
+            exit 1
+          fi
+          echo "=== payload ==="
+          ls -la "$RUNNER_TEMP/spike.xcarchive/Products/Applications" || true
 
       # ✅ AD HOC, AND THE CHOICE IS NOW DECIDED (owner, 2026-10-18).
       #
