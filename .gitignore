@@ -16,11 +16,27 @@ node_modules/
 # --- Expo / React Native generated output ---
 # android/ and ios/ are produced by `expo prebuild` (continuous native
 # generation), so they are build output rather than source for this spike.
+#
+# 🔴 ANCHORED WITH A LEADING SLASH, AND IT COST A WHOLE BUILD TO LEARN WHY.
+# Written as bare `android/` and `ios/` these matched a directory of that name
+# AT ANY DEPTH — so when `modules/antarii-evaluator/` gained its native halves,
+# git silently ignored `modules/antarii-evaluator/android/` and
+# `.../ios/` as well. **Three of the module's eight files were committed and
+# five were not**, and nothing complained: the build went GREEN, the APK and
+# IPA were produced, and the hosting probe would have reported `not-hosted`.
+#
+# ⚠ Read naively that says "Rust cannot be hosted in this stack" — a finding
+# that would have gone to ADR-005 — when the truth was that the module was
+# never shipped. *A gitignore pattern produced a false negative about an
+# architecture decision.*
+#
+# ➕ `/android/` and `/ios/` match ONLY the repository root, which is the only
+# place `expo prebuild` writes them.
 .expo/
-android/
-ios/
-dist/
-web-build/
+/android/
+/ios/
+/dist/
+/web-build/
 *.tsbuildinfo
 
 # --- built application packages ---

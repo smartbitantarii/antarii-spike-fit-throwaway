@@ -1,0 +1,29 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.smartbitit.antarii.spike'
+version = '0.0.0'
+
+android {
+  namespace "com.smartbitit.antarii.spike.evaluator"
+
+  // 🔴 WHERE THE RUST LIBRARY COMES FROM.
+  //
+  // CI cross-compiles the crate to a `.so` per ABI and places it under
+  // `src/main/jniLibs/<abi>/libantarii_evaluator.so` BEFORE `expo prebuild`.
+  // Gradle packages anything there into the APK automatically, which is why
+  // this needs no CMake and no `externalNativeBuild`.
+  //
+  // ⚠ IT IS NOT AN ERROR FOR THE DIRECTORY TO BE EMPTY, and that is
+  // deliberate: an APK built without the library still RUNS, and
+  // `requireOptionalNativeModule` reports `not-hosted` on screen. *A gradle
+  // failure here would turn a probe result into a build failure, and the
+  // spike would learn nothing from it.*
+  sourceSets {
+    main {
+      jniLibs.srcDirs = ['src/main/jniLibs']
+    }
+  }
+}

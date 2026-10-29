@@ -267,22 +267,51 @@ jobs:
           echo "NDK: ${NDK:-<unset>}"
           API=24
           TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          # ⚠ Same assertion as the iOS job, for the same reason: an ignored
+          # `android/` pattern meant this directory was never committed, so
+          # gradle had no module and the probe would have reported
+          # `not-hosted` from a green build.
+          if [ ! -f modules/antarii-evaluator/android/build.gradle ]; then
+            echo "FATAL: modules/antarii-evaluator/android is missing from the checkout" >&2
+            echo "       the Expo module was not committed — see .gitignore" >&2
+            exit 1
+          fi
           MOD=modules/antarii-evaluator/android/src/main/jniLibs
           mkdir -p "$MOD/arm64-v8a" "$MOD/x86_64"
-          # arm64 is the handsets; x86_64 only so an emulator run is possible.
-          build() {
-            tgt="$1"; abi="$2"; cc="$3"
-            echo "--- $tgt -> $abi"
-            CARGO_TARGET_$(echo "$tgt" | tr 'a-z-' 'A-Z_')_LINKER="$TC/$cc" \
-            CC="$TC/$cc" \
-              cargo build --release --locked --target "$tgt" \
-                --manifest-path evaluator/Cargo.toml \
-              && cp "evaluator/target/$tgt/release/libantarii_evaluator.so" \
-                    "$MOD/$abi/libantarii_evaluator.so" \
-              && echo "OK $abi" || echo "FAILED $abi — probe will report not-hosted"
-          }
-          build aarch64-linux-android arm64-v8a "aarch64-linux-android$API-clang" || true
-          build x86_64-linux-android  x86_64    "x86_64-linux-android$API-clang"  || true
+
+          # ⚠ LISTED, NOT ASSUMED. The clang wrapper names carry the API level
+          # and have changed across NDK releases, so the log shows what this
+          # NDK actually ships — otherwise a wrong name is another silent
+          # `FAILED` that looks like "Rust cannot be hosted".
+          echo "=== NDK clang wrappers present ==="
+          ls "$TC" 2>/dev/null | grep -E "^(aarch64|x86_64)-linux-android[0-9]+-clang$" | head
+
+          # 🔴 THE VARIABLE NAMES ARE WRITTEN OUT, AND THE FIRST VERSION WAS
+          # NOT. It built the name with a command substitution —
+          # `CARGO_TARGET_$(echo "$tgt" | tr …)_LINKER=…` — and **the shell
+          # cannot parse a substitution inside an assignment prefix**, so it
+          # treated the whole word as a COMMAND and reported
+          # "No such file or directory". *Both targets failed in 13 seconds
+          # without cargo ever running.*
+          set +e
+          echo "--- aarch64-linux-android -> arm64-v8a"
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TC/aarch64-linux-android$API-clang" \
+          CC="$TC/aarch64-linux-android$API-clang" \
+            cargo build --release --locked --target aarch64-linux-android \
+              --manifest-path evaluator/Cargo.toml \
+            && cp "evaluator/target/aarch64-linux-android/release/libantarii_evaluator.so" \
+                  "$MOD/arm64-v8a/libantarii_evaluator.so" \
+            && echo "OK arm64-v8a" || echo "FAILED arm64-v8a — probe will report not-hosted"
+
+          echo "--- x86_64-linux-android -> x86_64"
+          CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$TC/x86_64-linux-android$API-clang" \
+          CC="$TC/x86_64-linux-android$API-clang" \
+            cargo build --release --locked --target x86_64-linux-android \
+              --manifest-path evaluator/Cargo.toml \
+            && cp "evaluator/target/x86_64-linux-android/release/libantarii_evaluator.so" \
+                  "$MOD/x86_64/libantarii_evaluator.so" \
+            && echo "OK x86_64" || echo "FAILED x86_64 — probe will report not-hosted"
+          set -e
           echo "=== jniLibs contents ==="
           find "$MOD" -type f -printf '%p  %s bytes\n' || echo "(empty — not hosted)"
 
@@ -463,6 +492,16 @@ jobs:
           rustup toolchain install 1.99.1 --profile minimal --no-self-update
           rustup default 1.99.1
           rustup target add aarch64-apple-ios
+          # ⚠ The destination directory is ASSERTED, because its absence was
+          # the real failure last time and `cp`'s message named the
+          # destination in a way that read like a missing source.
+          # `modules/antarii-evaluator/ios/` was ignored by an unanchored
+          # `ios/` pattern and was never committed, so nothing was there.
+          if [ ! -d modules/antarii-evaluator/ios ]; then
+            echo "FATAL: modules/antarii-evaluator/ios is missing from the checkout" >&2
+            echo "       the Expo module was not committed — see .gitignore" >&2
+            exit 1
+          fi
           cargo build --release --locked --target aarch64-apple-ios \
             --manifest-path evaluator/Cargo.toml \
             && cp evaluator/target/aarch64-apple-ios/release/libantarii_evaluator.a \
