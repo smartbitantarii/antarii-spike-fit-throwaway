@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["AntariiEvaluatorModule"]
+  },
+  "android": {
+    "modules": ["com.smartbitit.antarii.spike.evaluator.AntariiEvaluatorModule"]
+  }
+}

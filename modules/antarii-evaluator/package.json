@@ -1,0 +1,10 @@
+{
+  "name": "antarii-evaluator",
+  "version": "0.0.0",
+  "private": true,
+  "description": "SC-10: can a Rust library be hosted in this client and called from JavaScript? Disposable.",
+  "license": "UNLICENSED",
+  "author": "Antarii Limited",
+  "homepage": "https://antarii.com",
+  "main": "index.ts"
+}

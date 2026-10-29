@@ -246,6 +246,46 @@ jobs:
 
       - run: npm ci
 
+      # 🔴 SC-10 — CROSS-COMPILE THE RUST LIBRARY BEFORE PREBUILD.
+      #
+      # The `.so` must sit in the module's `jniLibs/<abi>/` before gradle runs,
+      # because gradle packages whatever is there and nothing generates it.
+      #
+      # ⚠ `|| true` ON THE BUILD, AND IT IS DELIBERATE. A failed cross-compile
+      # must NOT fail this job: the APK still builds, the app still starts, and
+      # the probe reports `not-hosted` on screen with a reason. *The spike's
+      # question is "can Rust be hosted here"; a red build answers it with less
+      # information than a running app that says no.* The step prints loudly
+      # either way so the log is unambiguous.
+      - name: cross-compile the evaluator for Android
+        run: |
+          set -u
+          rustup toolchain install 1.99.1 --profile minimal --no-self-update
+          rustup default 1.99.1
+          rustup target add aarch64-linux-android x86_64-linux-android
+          NDK="$ANDROID_NDK_LATEST_HOME"
+          echo "NDK: ${NDK:-<unset>}"
+          API=24
+          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          MOD=modules/antarii-evaluator/android/src/main/jniLibs
+          mkdir -p "$MOD/arm64-v8a" "$MOD/x86_64"
+          # arm64 is the handsets; x86_64 only so an emulator run is possible.
+          build() {
+            tgt="$1"; abi="$2"; cc="$3"
+            echo "--- $tgt -> $abi"
+            CARGO_TARGET_$(echo "$tgt" | tr 'a-z-' 'A-Z_')_LINKER="$TC/$cc" \
+            CC="$TC/$cc" \
+              cargo build --release --locked --target "$tgt" \
+                --manifest-path evaluator/Cargo.toml \
+              && cp "evaluator/target/$tgt/release/libantarii_evaluator.so" \
+                    "$MOD/$abi/libantarii_evaluator.so" \
+              && echo "OK $abi" || echo "FAILED $abi — probe will report not-hosted"
+          }
+          build aarch64-linux-android arm64-v8a "aarch64-linux-android$API-clang" || true
+          build x86_64-linux-android  x86_64    "x86_64-linux-android$API-clang"  || true
+          echo "=== jniLibs contents ==="
+          find "$MOD" -type f -printf '%p  %s bytes\n' || echo "(empty — not hosted)"
+
       # `android/` is gitignored — continuous native generation means it is
       # build output, not source — so it is generated here each time.
       - name: expo prebuild (android)
@@ -410,6 +450,27 @@ jobs:
           echo "DEVELOPER_DIR=$best/Contents/Developer" >> "$GITHUB_ENV"
           echo "selected: $best_v  ($best)"
       
+      # 🔴 SC-10 — CROSS-COMPILE FOR THE DEVICE BEFORE PREBUILD.
+      #
+      # `aarch64-apple-ios` only: the target is the iPhone 13, not a simulator,
+      # and a universal archive would need `lipo` plus a second target for a
+      # run nobody is doing. ⚠ Same `|| true` discipline as Android — a failed
+      # cross-compile leaves the podspec's glob empty, the pod still builds,
+      # and the probe reports `not-hosted` rather than failing the build.
+      - name: cross-compile the evaluator for iOS
+        run: |
+          set -u
+          rustup toolchain install 1.99.1 --profile minimal --no-self-update
+          rustup default 1.99.1
+          rustup target add aarch64-apple-ios
+          cargo build --release --locked --target aarch64-apple-ios \
+            --manifest-path evaluator/Cargo.toml \
+            && cp evaluator/target/aarch64-apple-ios/release/libantarii_evaluator.a \
+                  modules/antarii-evaluator/ios/libantarii_evaluator.a \
+            && echo "OK — archive placed" \
+            || echo "FAILED — probe will report not-hosted"
+          ls -la modules/antarii-evaluator/ios/*.a 2>/dev/null || echo "(no archive)"
+
       - name: expo prebuild (ios)
         run: npx expo prebuild --platform ios --clean
 

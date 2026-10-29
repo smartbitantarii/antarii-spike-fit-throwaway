@@ -28,7 +28,16 @@ description = "ADR-005 §4.4a's ONE evaluator, for spike conditions 6 and 7. Dis
 # iOS native modules, which need a static archive rather than a Rust rlib.
 # `rlib` stays so `cargo test` still works — *a crate that could only be
 # cross-compiled could not be tested on a development machine.*
-crate-type = ["staticlib", "rlib"]
+crate-type = ["staticlib", "cdylib", "rlib"]
+# `staticlib` → the `.a` iOS links into its pod.
+# `cdylib`    → the `.so` Android loads with `System.loadLibrary`.
+# `rlib`      → so `cargo test` still runs on a development machine.
+#
+# ⚠ THE TWO PLATFORMS TAKE DIFFERENT ROUTES AND IT IS NOT AN INCONSISTENCY.
+# Swift calls a C function directly, so iOS needs only the `extern "C"` surface
+# in `ffi.rs`. Kotlin cannot, so Android goes through JNI (`jni.rs`) — and JNI
+# for two `jlong`s requires no `JNIEnv` calls, which is what keeps this crate
+# dependency-free. *JNI strings would need the `jni` crate; see `jni.rs`.*
 
 [dependencies]
 

@@ -59,6 +59,13 @@ provenance-forbidden.txt
 # version" because a p95 that gates an ADR has to be reproducible.
 evaluator/target/
 
+# `SC-10`'s cross-compiled artefacts — BUILD OUTPUT, generated in CI before
+# prebuild and never committed. ⚠ A 23 MB archive per ABI in a public
+# repository with unrewritable history would be the one mistake `.gitignore`
+# cannot undo, which is what the header above this file is about.
+modules/antarii-evaluator/android/src/main/jniLibs/
+modules/antarii-evaluator/ios/*.a
+
 # --- measurement output ---
 # Figures belong in the record (§8), not in the history as raw dumps.
 /measurements/

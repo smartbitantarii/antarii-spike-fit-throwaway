@@ -79,6 +79,11 @@ pub mod decimal;
 /// §4.8 names *"JavaScript ↔ the native library on the device"* as a boundary
 /// a decimal must cross as a string.
 pub mod ffi;
+/// Android's JNI entry points — see `jni.rs` for why iOS needs none.
+/// ⚠ `cfg(target_os)` so the symbol exists only where the JVM can call it,
+/// and `cargo test` on a development machine does not export a stray name.
+#[cfg(target_os = "android")]
+pub mod jni;
 pub mod value;
 
 #[cfg(test)]
