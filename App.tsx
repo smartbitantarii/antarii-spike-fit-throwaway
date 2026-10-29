@@ -37,7 +37,30 @@ import {
 } from './src/platform/expo-background.ts';
 import { buildFill, clearFill, measureFill } from './src/platform/expo-fill.ts';
 // ---- condition 4's probes (SC-03, SC-04, SC-10) ----
-import { CameraView } from 'expo-camera';
+/**
+ * 🔴 NOT A TOP-LEVEL IMPORT, AND THE REASON IS A LAUNCH CRASH.
+ *
+ * `expo-camera` is excluded from the APPLE build (see `package.json` →
+ * `expo.autolinking.apple.exclude`) because `ExpoCamera.framework` referenced
+ * a symbol `ExpoModulesCore.framework` does not export and **dyld killed the
+ * app ~19 ms after launch**.
+ *
+ * ⚠ **Excluding the pod is NOT sufficient on its own.**
+ * `expo-camera/build/ExpoCameraManager.js:2` is
+ * `export default requireNativeModule('ExpoCamera')` at **module scope**, and
+ * `requireNativeModule` *throws* when the native module is absent — so a
+ * static import would simply move the launch crash from dyld into JavaScript.
+ * *Read from the installed package, not recalled.*
+ *
+ * ➕ A `require` inside a branch is evaluated when the branch runs, never at
+ * launch, so **Android keeps the scanner whole and iOS never evaluates it.**
+ */
+const CameraView: React.ComponentType<Record<string, unknown>> | null =
+  Platform.OS === 'ios'
+    ? null
+    : // eslint-disable-next-line @typescript-eslint/no-require-imports
+      (require('expo-camera') as { CameraView: React.ComponentType<Record<string, unknown>> })
+        .CameraView;
 import { SignaturePad } from './src/ui/signature-pad.tsx';
 import { probeVideo } from './src/platform/expo-capability.ts';
 import { judgeScannedCode, type ProbeResult } from './src/media/capability.ts';
@@ -1678,14 +1701,45 @@ export default function App(): React.JSX.Element {
           <Text>Probe: video capture</Text>
         </Pressable>
         <Pressable
-          onPress={() => setScanning((s) => !s)}
+          onPress={() => {
+            // 🔴 ON iOS THIS RECORDS A REASON RATHER THAN OPENING A SCANNER.
+            // `CameraView` is null there (the package is excluded from the
+            // Apple build after the dyld launch crash), and mounting a null
+            // component would be a second crash in place of the first.
+            // ⚠ `SB-009`: a missing probe is not a condition-4 failure — but
+            // it is not a pass either, and silence in a record reads as a
+            // pass. So the record carries *not established* WITH the reason,
+            // which is the one thing `NOT_PROBED_TODAY` exists to say and
+            // currently cannot, because nothing delivers it.
+            if (CameraView === null) {
+              addProbe({
+                capability: 'barcode and QR, offline (SwR-092 / SwR-104)',
+                verdict: 'not-established',
+                detail:
+                  'expo-camera is excluded from the Apple build: ExpoCamera.framework ' +
+                  'referenced AnyModule._classTypes, which ExpoModulesCore.framework does ' +
+                  'not export, and dyld terminated the app ~19 ms after launch',
+                notProven:
+                  'barcode and QR on iOS entirely — deferred to a build with the expo-* ' +
+                  'versions aligned. Proven on Android, which has no Swift ABI',
+              });
+              return;
+            }
+            setScanning((s) => !s);
+          }}
           disabled={busy}
           style={styles.capture}
           accessibilityRole="button"
         >
-          <Text>{scanning ? 'Close the scanner' : 'Probe: barcode / QR (SwR-092)'}</Text>
+          <Text>
+            {CameraView === null
+              ? 'Probe: barcode / QR — UNAVAILABLE on iOS, tap to record why'
+              : scanning
+                ? 'Close the scanner'
+                : 'Probe: barcode / QR (SwR-092)'}
+          </Text>
         </Pressable>
-        {scanning ? (
+        {scanning && CameraView !== null ? (
           <CameraView
             style={{ height: 260, marginVertical: 8 }}
             // ⚠ The symbologies are NAMED rather than left to the default.
