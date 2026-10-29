@@ -33,6 +33,28 @@ export const RUNTIME_VERSION = '1';
  */
 export const BUILD_ID = 'N';
 
+/**
+ * 🔴 THE COMMIT THAT PRODUCED THIS BUILD — adversarial review finding `M4`.
+ *
+ * `BUILD_ID` above answers *"is this N or N+1"*, which is leg (iii)'s question
+ * and all it was ever for. ✕ **It does not answer *"which code is this"***, and
+ * it was `N` across more than twenty commits — so a record could not be tied
+ * to the tree that produced it, and figure selection fell back on commit
+ * timestamps a reader had to look up. *The project fixed exactly this for `S2`
+ * variants and left it standing here.*
+ *
+ * ⚠ **`null` WHEN UNKNOWN, NEVER A PLACEHOLDER.** Metro inlines
+ * `process.env.EXPO_PUBLIC_*` at build time; CI sets it from the checked-out
+ * sha. A local `expo run:android` without it records **`null`**, which says
+ * *"not established"* — ✕ *a string like `'local'` or `'unknown'` would be the
+ * `C1` defect in a new field: a value that looks recorded and is not.*
+ *
+ * ➕ Deliberately NOT read with `git rev-parse` at start-up: the device has no
+ * repository, and a build-time constant is the only thing that can be true on
+ * a handset.
+ */
+export const COMMIT: string | null = process.env.EXPO_PUBLIC_COMMIT ?? null;
+
 /** Both, for a record line that is unambiguous on its own. */
 export function buildStamp(): string {
   return BUILD_ID + ' (v' + APP_VERSION + ', runtime ' + RUNTIME_VERSION + ')';

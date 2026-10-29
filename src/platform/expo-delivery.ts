@@ -122,6 +122,9 @@ const FILL_FILE = 'fill-state.txt';
  */
 const INTEGRITY_FILE = 'integrity-check.txt';
 
+/** The run's connectivity (review finding `C1`) — `on`, `off`, or empty. */
+const OFFLINE_FILE = 'offline-state.txt';
+
 function readSetting(name: string): string {
   try {
     const f = new File(figuresDir(), name);
@@ -168,6 +171,35 @@ export function readDeviceLabel(): string {
 
 export async function saveDeviceLabel(label: string): Promise<void> {
   await saveSetting(DEVICE_FILE, label);
+}
+
+/**
+ * 🔴 THE RUN'S CONNECTIVITY, AS §6d WANTS IT RECORDED — review finding `C1`.
+ *
+ * Tri-state on purpose. ⚠ **`null` is the default and it means *not
+ * established***: `offline` used to be a hard-coded `false` that nothing ever
+ * wrote, so twenty records asserted a run condition nobody had set — against
+ * requirements that bind *"offline included"*.
+ *
+ * ➕ **Only the exact words `on` and `off` decide**; anything else — absent,
+ * unreadable, a typo — returns `null`. *A setting that fell back to `false`
+ * when unreadable would recreate the defect through the back door, which is
+ * the same trap `readIntegrityCheckOnOpen` above avoids in the other
+ * direction.*
+ *
+ * ⚠ Read synchronously at start-up for the reason the device label is: the
+ * harness is constructed with the context, so a value arriving later would
+ * leave already-recorded figures naming the wrong condition.
+ */
+export function readOffline(): boolean | null {
+  const v = readSetting(OFFLINE_FILE).toLowerCase();
+  if (v === 'on') return true;
+  if (v === 'off') return false;
+  return null;
+}
+
+export async function saveOffline(state: boolean | null): Promise<void> {
+  await saveSetting(OFFLINE_FILE, state === null ? '' : state ? 'on' : 'off');
 }
 
 export function readFillState(): string {

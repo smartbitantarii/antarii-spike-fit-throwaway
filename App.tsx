@@ -42,7 +42,7 @@ import { keystoreKeyProvider, openExpoDatabase } from './src/platform/expo-adapt
 import { spikeForm, denseFocusTransitions } from './src/form/spike-form.ts';
 import { makeWorklist, jobForIteration, DEFAULT_WORKLIST_VOLUME, type Job } from './src/form/worklist.ts';
 import { WorklistScreen } from './src/ui/worklist-screen.tsx';
-import { BUILD_ID } from './src/build.ts';
+import { BUILD_ID, COMMIT } from './src/build.ts';
 import {
   planCapture,
   SHIPPED_LAYERS,
@@ -67,6 +67,8 @@ import {
   readDeviceLabel,
   saveDeviceLabel,
   readFillState,
+  readOffline,
+  saveOffline,
   saveFillState,
   readIntegrityCheckOnOpen,
   saveIntegrityCheckOnOpen,
@@ -84,12 +86,20 @@ const context: RunContext = {
   // would name the wrong build, which is a false pass on the leg that tests
   // the update. build.test.ts holds build.ts and app.json to each other.
   buildId: BUILD_ID,
+  // 🔴 Review finding `M4`: `BUILD_ID` says N or N+1, this says which code.
+  // `null` when the build did not bake it in — see `build.ts`.
+  commit: COMMIT,
   // ⚠ Replaced at start-up by the operator's stored label. The first
   // delivery from a phone wrote `..._set-at-run-time-by-the-operator_N.json`
   // — the placeholder reached the evidence, which §6d does not permit.
   device: 'UNSET — set the device label',
   fill: 'set at run time by the operator',
-  offline: false,
+  // 🔴 `null`, NOT `false` — adversarial review finding `C1`, a Critical.
+  // This read `offline: false` and nothing ever wrote it, so every record
+  // asserted a run condition that had not been observed, against requirements
+  // that bind "offline included". ⚠ Set by the operator, like `device` and
+  // `fill`; left `null` it says *not established*, which is the truth.
+  offline: null,
 };
 
 /** The tenant default SwR-093 defaults to; the worker may switch from it. */
@@ -191,6 +201,11 @@ export default function App(): React.JSX.Element {
       ...context,
       device: readDeviceLabel() || context.device,
       fill: readFillState() || context.fill,
+      // 🔴 Review finding `C1`. ⚠ NOT `|| context.offline` — `??` is required,
+      // because `false` is a legitimate recorded value and `||` would discard
+      // it for the `null` default. *The one-character version of the bug this
+      // field already had once.*
+      offline: readOffline() ?? context.offline,
     }),
     [],
   );
@@ -205,6 +220,8 @@ export default function App(): React.JSX.Element {
    */
   const integrityCheckOnOpen = React.useMemo(() => readIntegrityCheckOnOpen(), []);
   const [integrityPref, setIntegrityPref] = React.useState(integrityCheckOnOpen);
+  /** Review finding `C1` — the run condition, declared and persisted. */
+  const [offlinePref, setOfflinePref] = React.useState<boolean | null>(() => readOffline());
   const [openTimings, setOpenTimings] = React.useState<OpenTimings | null>(null);
 
   /**
@@ -1561,6 +1578,35 @@ export default function App(): React.JSX.Element {
                 ? 'background verify: waiting for the worklist to settle'
                 : 'background verify: running…'}
         </Text>
+        {/*
+          🔴 THE RUN CONDITION THE REQUIREMENTS BIND — review finding `C1`.
+          Cycles not-established -> offline -> online, because `null` has to be
+          reachable: a two-state control would make "nobody recorded it"
+          unexpressible, which is the defect being fixed.
+          ⚠ The operator is declaring it, so the phone must actually be in
+          that state — `SwR-092` wants barcode/QR proven OFFLINE.
+        */}
+        <Pressable
+          onPress={() => {
+            const next = offlinePref === null ? true : offlinePref ? false : null;
+            setOfflinePref(next);
+            void saveOffline(next);
+          }}
+          disabled={fillBusy || busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>
+            {'Run condition: ' +
+              (offlinePref === null
+                ? '⚠ NOT ESTABLISHED — tap to set'
+                : offlinePref
+                  ? 'OFFLINE (airplane mode)'
+                  : 'online') +
+              ' — restart to apply' +
+              (offlinePref === runContext.offline ? '' : '  ⚠ RESTART PENDING')}
+          </Text>
+        </Pressable>
         <Pressable
           onPress={() => {
             const next = !integrityPref;

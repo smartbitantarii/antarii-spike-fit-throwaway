@@ -115,7 +115,8 @@ export interface RunRecord {
   device: DeviceIdentity;
   formShape: FormShape;
   worklistVolume: number;
-  offline: boolean;
+  /** `null` = not established. See `RunContext.offline` — review finding `C1`. */
+  offline: boolean | null;
 
   /** ➕ the plan's labelled additions */
   buildId: string;
@@ -334,8 +335,28 @@ export interface DevicePayload {
   kindNote: string;
   date: string;
   buildId: string;
+  /**
+   * 🔴 WHICH COMMIT PRODUCED THIS RECORD — adversarial review finding `M4`.
+   *
+   * `buildId` is **`N`** in every record from 2026-10-19 to 2026-10-29, across
+   * more than twenty commits, and that is **by design**: `N` and `N+1` are the
+   * run plan's own names for leg (iii)'s pair, and `build.test.ts` holds them
+   * to `app.json`. ✕ **But it means no record can say which CODE produced it**,
+   * and figure selection already depended on recollection — Android's `S2` of
+   * 246.00 ms is excluded **correctly, but only because commit times place it
+   * before `53bbf02`**, which the record cannot show.
+   *
+   * ✅ **So this is ADDITIVE, not a replacement.** `buildId` keeps its job.
+   *
+   * ⚠ **`null` when unknown, never a placeholder.** It is baked by Metro from
+   * `EXPO_PUBLIC_COMMIT` at build time; a local build without it records
+   * `null` rather than a plausible-looking lie. *That is the whole lesson of
+   * `C1` applied in advance.*
+   */
+  commit: string | null;
   device: { model: string };
-  offline: boolean;
+  /** `null` = not established. See `RunContext.offline` — review finding `C1`. */
+  offline: boolean | null;
   fill: string;
   figures: Figure[];
   /**
@@ -537,8 +558,17 @@ export function devicePayload(
     steps,
     date: atIso,
     buildId: context.buildId,
+    // ⚠ `?? null` IS LOAD-BEARING, not defensive clutter. There is no
+    // type-checking in this project, so a caller that omits `commit` compiles
+    // and runs — and `JSON.stringify` DROPS undefined keys, so the field
+    // would vanish from the record instead of saying *not established*.
+    // *That is review finding `C1` reappearing in the field added to fix
+    // `M4`, which is why it is pinned here rather than trusted upstream.*
+    commit: context.commit ?? null,
     device: { model: context.device },
-    offline: context.offline,
+    // Same reasoning as `commit` above: `?? null` so an omitted field records
+    // *not established* rather than disappearing.
+    offline: context.offline ?? null,
     fill: context.fill,
     figures,
     coldStartMs,

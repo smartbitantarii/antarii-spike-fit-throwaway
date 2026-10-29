@@ -8,7 +8,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateRecord, emitRecord, serialiseRecord, devicePayload, type RunRecord } from './report.ts';
+import { validateRecord, emitRecord, serialiseRecord, devicePayload, stableJson, type RunRecord } from './report.ts';
 import { TARGET_MS, type Figure } from './harness.ts';
 
 function figure(seq: 'S1' = 'S1', n = 100): Figure {
@@ -269,4 +269,54 @@ test('a payload with no cold start says null rather than omitting it', () => {
   const ctx = { buildId: 'N', device: 'x', fill: 'none', offline: true };
   const p = devicePayload('campaign', ctx, [figure()]);
   assert.equal(p.coldStartMs, null, 'absent must be explicit, not missing');
+});
+
+// ---------------------------------------------- adversarial review C1 and M4
+//
+// 🔴 Both findings are the same defect in two fields: a value that LOOKS
+// recorded and was not. `offline` was a hard-coded `false` nothing ever wrote,
+// so twenty records asserted a run condition against requirements that bind
+// "offline included"; `buildId` was `N` across twenty-plus commits, so no
+// record could say which code produced it.
+//
+// ⚠ These tests exist because the type system cannot catch it: this project
+// has no type-checking, so a caller that omits either field compiles and runs.
+
+test('C1: an omitted run condition records null, not false', () => {
+  const ctx = { buildId: 'N', device: 'x', fill: 'none' } as never;
+  const p = devicePayload('campaign', ctx, [figure()]);
+  assert.equal(p.offline, null, 'absent must be *not established*, never a claim');
+  assert.notEqual(p.offline, false, 'false is an assertion about the run');
+});
+
+test('C1: offline === false survives, because `||` would have eaten it', () => {
+  // ⚠ The one-character version of the bug: `readOffline() || default` would
+  // discard a legitimate recorded `false` for the null default.
+  const ctx = { buildId: 'N', device: 'x', fill: 'none', offline: false };
+  assert.equal(devicePayload('campaign', ctx, [figure()]).offline, false);
+  const on = { buildId: 'N', device: 'x', fill: 'none', offline: true };
+  assert.equal(devicePayload('campaign', on, [figure()]).offline, true);
+});
+
+test('M4: the commit is recorded, and an absent one is null rather than missing', () => {
+  const withCommit = {
+    buildId: 'N', device: 'x', fill: 'none', offline: true, commit: 'deadbee',
+  };
+  assert.equal(devicePayload('campaign', withCommit, [figure()]).commit, 'deadbee');
+
+  const without = { buildId: 'N', device: 'x', fill: 'none', offline: true } as never;
+  assert.equal(devicePayload('campaign', without, [figure()]).commit, null);
+});
+
+test('🔴 M4/C1: both keys are PRESENT in the serialised record even when unset', () => {
+  // The real hazard, and the reason `?? null` is in the builder: an
+  // `undefined` field is DROPPED by JSON.stringify, so the record would lose
+  // the field entirely rather than carry "not established" into the evidence.
+  const ctx = { buildId: 'N', device: 'x', fill: 'none' } as never;
+  const json = stableJson(devicePayload('campaign', ctx, [figure()]));
+  const back = JSON.parse(json) as Record<string, unknown>;
+  assert.ok('offline' in back, 'offline must survive serialisation');
+  assert.ok('commit' in back, 'commit must survive serialisation');
+  assert.equal(back.offline, null);
+  assert.equal(back.commit, null);
 });

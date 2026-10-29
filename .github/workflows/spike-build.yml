@@ -219,6 +219,19 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.android
     runs-on: ubuntu-24.04
     needs: test
+    # 🔴 BAKE THE COMMIT INTO THE BUNDLE — review finding `M4`.
+    #
+    # `buildId` is `N` by design — leg (iii)'s N/N+1 pair — and was `N` across
+    # twenty-plus commits, so no record could say which CODE produced it, and
+    # figure selection fell back on commit timestamps a reader had to look up.
+    #
+    # ➕ `EXPO_PUBLIC_*` is inlined by Metro at bundle time, which is the only
+    # mechanism that can be true on a handset: the device has no repository to
+    # ask. ⚠ At JOB level rather than as a step, so it reaches `prebuild` and
+    # the Gradle bundle alike. Absent, `build.ts` records `null` — never a
+    # placeholder, which would be review finding `C1` in a new field.
+    env:
+      EXPO_PUBLIC_COMMIT: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
 
@@ -305,6 +318,9 @@ jobs:
     # either way — "the key is never in the repository", and an environment
     # secret is not in the repository — but rule 5 is a floor, not a ceiling.
     environment: ios-signing
+    # Review finding `M4` — see the android job for the reasoning.
+    env:
+      EXPO_PUBLIC_COMMIT: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
 

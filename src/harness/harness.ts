@@ -42,12 +42,40 @@ type Mark = { seq: SeqId; token: string; at: number };
 export interface RunContext {
   /** build identifier, recorded with every figure (§6d) */
   buildId: string;
+  /**
+   * The commit that produced the build — review finding `M4`. `null` when it
+   * was not baked in, which says *not established* rather than guessing.
+   * ➕ Here beside `buildId` because this is where build identity lives; `N`
+   * answers *which version*, this answers *which code*.
+   */
+  commit: string | null;
   /** capability and actual model, e.g. "mid-tier Android / Pixel 6a" (§6d) */
   device: string;
   /** the §3a fill state the device is at THROUGHOUT the sample (§6a) */
   fill: string;
-  /** whether the run is offline (§6d) */
-  offline: boolean;
+  /**
+   * Whether the run is offline (§6d).
+   *
+   * 🔴 **`null` MEANS NOT ESTABLISHED, AND IT IS THE DEFAULT — adversarial
+   * review finding `C1`, a Critical.** This was `boolean`, initialised to
+   * `false` at module scope and **never written by anything**, so **all twenty
+   * §3a-fill campaign records assert `"offline": false` as though it had been
+   * observed.** ⚠ `SwR-100` and `SwR-066` both bind *"offline **included**"*
+   * and brief §3a says *"offline throughout"* — *so the field that was meant
+   * to record the requirement's own run condition was a constant.*
+   *
+   * ➕ Tri-state because the honest states are three, not two: **offline**,
+   * **online**, and **nobody recorded it**. *A boolean forced the third to
+   * impersonate one of the first two.*
+   *
+   * ⚠ **It is an operator DECLARATION, not an observation, and that is the
+   * right shape here rather than a concession.** The one probe this still
+   * binds under the narrowed scope is **barcode/QR, which `SwR-092` requires
+   * offline** — and there the operator puts the handset in airplane mode
+   * deliberately. *Declared is what `fill` is too; what `C1` objected to was a
+   * constant presented as a reading.*
+   */
+  offline: boolean | null;
 }
 
 /**
