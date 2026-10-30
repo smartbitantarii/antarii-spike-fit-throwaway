@@ -240,11 +240,20 @@ export function FieldWidget(props: WidgetProps): React.JSX.Element {
 
       case 'checkbox':
       case 'check-item': {
-        const on = value === true || value === 'true';
+        /**
+         * 🔴 A CHECK ITEM STORES `fail`, NOT `true` (round 1, 2026-10-30, item 7).
+         * `defect-requires-explanation` reads `a.defect === 'fail'`, and this
+         * control wrote `'true'`, so the rule could not fire from the screen
+         * and *required* never appeared. It stays a two-state tick here; the
+         * spike does not need `SwR-081`'s third state.
+         */
+        const isCheckItem = field.type === 'check-item';
+        const on = isCheckItem ? value === 'fail' : value === true || value === 'true';
+        const toggled = isCheckItem ? (on ? 'pass' : 'fail') : on ? 'false' : 'true';
         return (
           <Pressable
             style={[controlStyle(profile, state.valid), { flexDirection: 'row', alignItems: 'center' }]}
-            onPress={() => onCommit(field.id, on ? 'false' : 'true')}
+            onPress={() => onCommit(field.id, toggled)}
             accessibilityRole="checkbox"
             accessibilityState={{ checked: on }}
             accessibilityLabel={a11yLabel}

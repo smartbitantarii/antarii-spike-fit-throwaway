@@ -30,6 +30,13 @@ import { TOKENS, type Profile } from './profile.ts';
 export function SignaturePad(props: {
   profile: Profile;
   onResult: (r: ProbeResult) => void;
+  /**
+   * 🔴 iOS LET THE PAGE SCROLL INSTEAD OF DRAWING (round 1, 2026-10-30): the
+   * pad sits in a `ScrollView`, the native scroll took the touch, and
+   * `onPanResponderTerminate` then discarded the stroke. The parent switches
+   * its scrolling off while this is `true`.
+   */
+  onActiveChange?: (active: boolean) => void;
 }): React.JSX.Element {
   const t = TOKENS[props.profile];
   /**
@@ -55,7 +62,10 @@ export function SignaturePad(props: {
         // never arrive at all.
         onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: () => true,
+        // ➕ Refuse to hand the stroke to the enclosing scroll view.
+        onPanResponderTerminationRequest: () => false,
         onPanResponderGrant: (e) => {
+          props.onActiveChange?.(true);
           points.current = [
             { x: e.nativeEvent.locationX, y: e.nativeEvent.locationY },
           ];
@@ -84,6 +94,7 @@ export function SignaturePad(props: {
           });
         },
         onPanResponderRelease: () => {
+          props.onActiveChange?.(false);
           // The judgement is the pure function's, never this component's.
           props.onResult(judgeSignatureStroke(points.current));
         },
@@ -91,6 +102,7 @@ export function SignaturePad(props: {
         // a notification, a call — and judging the partial stroke would record
         // a verdict about the framework from an interruption.
         onPanResponderTerminate: () => {
+          props.onActiveChange?.(false);
           points.current = [];
           setShown({ n: 0, w: 0, h: 0 });
         },

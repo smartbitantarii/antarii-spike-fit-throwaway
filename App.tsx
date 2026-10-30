@@ -268,6 +268,7 @@ export default function App(): React.JSX.Element {
     setProbes((prev) => [...prev, r as ProbeRecord]);
   }, []);
   const [scanning, setScanning] = React.useState(false);
+  const [signing, setSigning] = React.useState(false);
   const [openTimings, setOpenTimings] = React.useState<OpenTimings | null>(null);
 
   /**
@@ -1451,7 +1452,7 @@ export default function App(): React.JSX.Element {
 
   if (openFailure) {
     return (
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView style={styles.failurePane} contentContainerStyle={styles.content}>
         <Text style={styles.status}>The encrypted store did not open.</Text>
         <Text selectable style={styles.note}>{openFailure}</Text>
         <Text style={styles.note}>
@@ -1484,7 +1485,7 @@ export default function App(): React.JSX.Element {
    */
   if (store.isQuarantined()) {
     return (
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView style={styles.failurePane} contentContainerStyle={styles.content}>
         <Text style={styles.status}>This device’s data cannot be trusted.</Text>
         <Text style={styles.note}>
           The encrypted store on this phone failed its integrity check, which means part of
@@ -1533,7 +1534,7 @@ export default function App(): React.JSX.Element {
    * is being measured.
    */
   const controls = (
-    <ScrollView style={styles.controlsPane}>
+    <ScrollView style={styles.controlsPane} scrollEnabled={!signing}>
       {/*
         SyR-221: "On a phone, the actions used most often during capture shall be
         reachable by the thumb of the hand holding it, in every profile." The
@@ -1757,7 +1758,7 @@ export default function App(): React.JSX.Element {
         <Text style={styles.note}>
           Probe: signature (SyR-089) — draw below, then lift
         </Text>
-        <SignaturePad profile={profile} onResult={addProbe} />
+        <SignaturePad profile={profile} onResult={addProbe} onActiveChange={setSigning} />
         {probes.length > 0 ? (
           <Text selectable style={styles.note}>
             {probes
@@ -2039,7 +2040,17 @@ export default function App(): React.JSX.Element {
         return (
           <View key={section.id} style={styles.section}>
             {/* SwR-082: collapsible, and one expanded at a time */}
-            <Pressable onPress={() => setOpenSection(expanded ? '' : section.id)}>
+            {/*
+              ➕ Round 1's screen-reader pass (items 2, 4): the header was not
+              announced as actionable and its state was not spoken. The label
+              keeps the ▸ ▾ glyph from being read out as "right triangle".
+            */}
+            <Pressable
+              onPress={() => setOpenSection(expanded ? '' : section.id)}
+              accessibilityRole="button"
+              accessibilityLabel={section.label}
+              accessibilityState={{ expanded }}
+            >
               <Text style={styles.sectionLabel}>
                 {expanded ? '▾' : '▸'} {section.label}
               </Text>
@@ -2093,13 +2104,20 @@ const styles = StyleSheet.create({
    * fill's own status line, the one thing that says whether the device is in
    * the state §6a requires.
    */
-  screen: { flex: 1, paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 0 },
+  // ➕ Off-white, set explicitly: with none, a phone in dark theme showed its dark
+  // window behind this file's dark text and the panel could barely be read.
+  screen: {
+    flex: 1,
+    backgroundColor: '#f7f5ef',
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 0,
+  },
   /** Bounded, so the screen underneath stays visible and reachable. */
-  controlsPane: { maxHeight: '55%' },
+  controlsPane: { maxHeight: '55%', backgroundColor: '#f7f5ef' },
   /** §F-6: collapsed means hidden and out of layout, never unmounted. */
   collapsed: { display: 'none' },
   /** Inside a screen that already pads for the status bar; padding twice would gap. */
   pane: { flex: 1 },
+  failurePane: { flex: 1, backgroundColor: '#f7f5ef' },
   content: { padding: 16 },
   status: { padding: 24 },
   section: { marginBottom: 12 },
