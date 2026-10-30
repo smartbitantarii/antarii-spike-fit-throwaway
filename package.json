@@ -18,7 +18,7 @@
     "expo": "58.0.11",
     "expo-asset": "58.0.16",
     "expo-build-properties": "58.0.10",
-    "expo-camera": "58.0.14",
+    "expo-camera": "58.0.10",
     "expo-crypto": "58.0.6",
     "expo-file-system": "58.0.9",
     "expo-image-manipulator": "58.0.14",
@@ -28,43 +28,5 @@
     "expo-sqlite": "58.0.13",
     "react": "19.3.0",
     "react-native": "0.88.0"
-  },
-  "expo": {
-    "autolinking": {
-      "apple": {
-        "comment": [
-          "🔴 expo-camera IS EXCLUDED FROM THE APPLE BUILD ONLY, AND IT IS THE FIX",
-          "FOR A LAUNCH CRASH RATHER THAN A PREFERENCE.",
-          "",
-          "On 2026-10-29 the iPhone 13 died ~19 ms after launch, before any",
-          "application code: dyld 'Symbol missing', AnyModule._classTypes, referenced",
-          "from ExpoCamera.framework and expected in ExpoModulesCore.framework",
-          "(crash report AntariiSpike-2026-10-29-220427.ips). The eleven expo-*",
-          "packages are hand-pinned at mismatched patch levels — expo 58.0.11, whose",
-          "one nested expo-modules-core is 58.0.19, beside expo-camera 58.0.14, which",
-          "constrains the core not at all: its only peer is \"expo\": \"*\".",
-          "",
-          "⚠ SCOPED TO apple ON PURPOSE. Android has no Swift ABI, its build carries",
-          "expo-camera and runs, and SC-04's scanner is proven there. Excluding it",
-          "for both platforms would discard a working capability to fix the other's",
-          "defect.",
-          "",
-          "➕ This is the isolation NOT_PROBED_TODAY asked for and we then broke:",
-          "'the only new native package in scope, isolated to its own build step",
-          "because F-12 is unexplained and one package keeps blame attributable'.",
-          "SC-04 and SC-10 shipped together, so a camera defect first presented as a",
-          "possible Rust-hosting failure — a finding that would have gone to ADR-005.",
-          "",
-          "✕ TEMPORARY. The real fix is aligning the expo-* versions, after which",
-          "this key comes out and iOS barcode is answered properly.",
-          "",
-          "ⓘ The key path is read from the installed source, not recalled:",
-          "expo-modules-autolinking/build/commands/autolinkingOptions.js:72-79 reads",
-          "expo.autolinking, then expo.autolinking[platform] where platform is",
-          "'apple' or 'android' (falling back to 'ios' when 'apple' is absent)."
-        ],
-        "exclude": ["expo-camera"]
-      }
-    }
   }
 }

@@ -38,29 +38,28 @@ import {
 import { buildFill, clearFill, measureFill } from './src/platform/expo-fill.ts';
 // ---- condition 4's probes (SC-03, SC-04, SC-10) ----
 /**
- * 🔴 NOT A TOP-LEVEL IMPORT, AND THE REASON IS A LAUNCH CRASH.
+ * ✅ `expo-camera` IS BACK IN THE APPLE BUILD, 2026-10-30 — the version skew is fixed.
  *
- * `expo-camera` is excluded from the APPLE build (see `package.json` →
- * `expo.autolinking.apple.exclude`) because `ExpoCamera.framework` referenced
- * a symbol `ExpoModulesCore.framework` does not export and **dyld killed the
- * app ~19 ms after launch**.
+ * On 2026-10-29 dyld killed the iPhone build ~19 ms after launch:
+ * `ExpoCamera.framework` referenced `AnyModule._classTypes`, which
+ * `ExpoModulesCore.framework` 58.0.19 does not export. **The cause, read from
+ * the npm registry rather than inferred:** `expo` 58.0.11's own
+ * `bundledNativeModules.json` lists `expo-camera ~58.0.10`, and the
+ * `expo-camera` we had, **58.0.14**, is the one **SDK 58.0.21** lists — its
+ * `devDependencies` name `expo 58.0.21`, whose core is `~58.0.28`. So the
+ * camera was one SDK patch ahead of everything else. **Pinned to 58.0.10**,
+ * the version this SDK patch names; nothing else moved, `expo-sqlite`
+ * included, so the store is unchanged.
  *
- * ⚠ **Excluding the pod is NOT sufficient on its own.**
- * `expo-camera/build/ExpoCameraManager.js:2` is
- * `export default requireNativeModule('ExpoCamera')` at **module scope**, and
- * `requireNativeModule` *throws* when the native module is absent — so a
- * static import would simply move the launch crash from dyld into JavaScript.
- * *Read from the installed package, not recalled.*
- *
- * ➕ A `require` inside a branch is evaluated when the branch runs, never at
- * launch, so **Android keeps the scanner whole and iOS never evaluates it.**
+ * ⚠ Still `require`d rather than imported, and `null` stays in the type, so
+ * the "record why" path below survives if the platform ever lacks the module.
+ * *A dyld failure happens at load regardless, so this does not guard launch —
+ * only the next device run shows the fix holds.*
  */
 const CameraView: React.ComponentType<Record<string, unknown>> | null =
-  Platform.OS === 'ios'
-    ? null
-    : // eslint-disable-next-line @typescript-eslint/no-require-imports
-      (require('expo-camera') as { CameraView: React.ComponentType<Record<string, unknown>> })
-        .CameraView;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  (require('expo-camera') as { CameraView: React.ComponentType<Record<string, unknown>> })
+    .CameraView;
 import { SignaturePad } from './src/ui/signature-pad.tsx';
 import { probeVideo } from './src/platform/expo-capability.ts';
 import { judgeScannedCode, type ProbeResult } from './src/media/capability.ts';
