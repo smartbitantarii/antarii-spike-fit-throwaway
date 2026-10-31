@@ -41,7 +41,8 @@
         "expo-build-properties",
         {
           "android": {
-            "usesCleartextTraffic": true
+            "usesCleartextTraffic": true,
+            "extraProguardRules": "-keep class * implements com.google.firebase.components.ComponentRegistrar { void <init>(); }"
           }
         }
       ]
