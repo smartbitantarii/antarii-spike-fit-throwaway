@@ -89,7 +89,7 @@ function sealedDir(): Directory {
  * ⚠ That it is genuinely outside the backup set is an ECOSYSTEM claim against
  * a May 2026 cutoff and is leg (iv)'s business to confirm on hardware.
  */
-function stagingDir(): Directory {
+export function stagingDir(): Directory {
   const d = new Directory(Paths.cache, 'staging');
   if (!d.exists) d.create();
   return d;

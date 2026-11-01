@@ -61,6 +61,14 @@ const CameraView: React.ComponentType<Record<string, unknown>> | null =
   (require('expo-camera') as { CameraView: React.ComponentType<Record<string, unknown>> })
     .CameraView;
 import { SignaturePad } from './src/ui/signature-pad.tsx';
+import { uploadRunDeps } from './src/platform/expo-upload-run.ts';
+import {
+  LEG_III_STOP_AFTER_PARTS,
+  probeLegII,
+  resumeLegIII,
+  startLegIII,
+  type UploadRunDeps,
+} from './src/media/upload-run.ts';
 import { probeVideo } from './src/platform/expo-capability.ts';
 import { judgeScannedCode, type ProbeResult } from './src/media/capability.ts';
 import { probeHosting, probeDecimalBoundary } from './modules/antarii-evaluator/index.ts';
@@ -1425,6 +1433,27 @@ export default function App(): React.JSX.Element {
 
   const state = React.useMemo(() => evaluate(form, answers, order), [form, answers, order]);
 
+  const runUploadProbe = React.useCallback(
+    async (run: (deps: UploadRunDeps) => Promise<ProbeResult[]>) => {
+      setBusy(true);
+      try {
+        for (const r of await run(await uploadRunDeps(store.database(), collector, BUILD_ID))) {
+          addProbe(r);
+        }
+      } catch (err) {
+        addProbe({
+          capability: 'axis 5: the upload path',
+          verdict: 'no-route',
+          detail: 'threw before the probe ran: ' + String(err),
+          notProven: 'everything this probe would have shown',
+        });
+      } finally {
+        setBusy(false);
+      }
+    },
+    [addProbe, collector, store],
+  );
+
   /**
    * S3 and S6 share ONE start, which is the brief's design (§6c) and the
    * reason the harness takes a token: S3 stops when the write is committed,
@@ -1766,6 +1795,48 @@ export default function App(): React.JSX.Element {
               .join('\n')}
           </Text>
         ) : null}
+        {/*
+          Round 3 — legs (ii) and (iii) on the phone. Each needs the 1a stack
+          reachable: the collector for grants, port 9090 for the object store.
+          ⚠ Deliver before leaving the app: a probe lives in memory, and leg
+          (iii)'s first half is lost to the record otherwise.
+        */}
+        <Pressable
+          onPress={() => {
+            void runUploadProbe(async (deps) => [
+              await probeLegII(deps, 'spike-leg-ii-' + Date.now()),
+            ]);
+          }}
+          disabled={busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>{busy ? 'running…' : 'Leg (ii): run the upload bound check'}</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => {
+            void runUploadProbe(async (deps) => [await startLegIII(deps)]);
+          }}
+          disabled={busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>
+            {busy
+              ? 'running…'
+              : `Leg (iii) step 1: start an upload, stop after ${LEG_III_STOP_AFTER_PARTS} parts`}
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={() => {
+            void runUploadProbe(resumeLegIII);
+          }}
+          disabled={busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>{busy ? 'running…' : 'Leg (iii) step 2: resume after the update'}</Text>
+        </Pressable>
         <Pressable
           onPress={() => {
             const next = offlinePref === null ? true : offlinePref ? false : null;

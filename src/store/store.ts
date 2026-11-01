@@ -497,6 +497,11 @@ export class SqlCipherStore implements EncryptedStore {
     return Number(before?.n ?? 0);
   }
 
+  /** The open handle, for the media tables that live beside the answers. */
+  database(): SqliteLike {
+    return this.require();
+  }
+
   async close(): Promise<void> {
     if (this.db) {
       await this.db.closeAsync();
