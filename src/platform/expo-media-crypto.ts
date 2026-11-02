@@ -33,7 +33,7 @@ import {
   aesDecryptAsync,
   type GCMTagByteLength,
 } from 'expo-crypto';
-import { File, Directory, Paths } from 'expo-file-system';
+import { File, Directory, Paths, FileMode } from 'expo-file-system';
 
 import type { Crypto, Fs, PartRef, StagingFile } from '../media/media.ts';
 import {
@@ -99,9 +99,15 @@ export function stagingDir(): Directory {
  * Seals a captured file into per-part GCM blobs and returns the descriptor the
  * uploader must later plan from.
  *
- * ⚠ Each chunk is read with `File.slice(...).arrayBuffer()`, so the **whole
- * media file is never loaded at once** — only one chunk at a time, which is
- * the same discipline §5.3.3 imposes on the upload side.
+ * 🔴 READ THROUGH A FILE HANDLE, ONE CHUNK AT A TIME — corrected 2026-11-02 on
+ * the first phone run. This used `File.slice(...).arrayBuffer()`, and it
+ * threw on Android: *"Creating blobs from 'ArrayBuffer' and 'ArrayBufferView'
+ * are not supported"*. `expo-file-system` 58.0.9's `slice` is
+ * `new Blob([this.bytesSync().slice(start, end)])` (read in
+ * `build/File.js`), and React Native's `Blob` refuses bytes. ✕ **And the
+ * comment here was wrong too**: it said the whole file is never loaded at
+ * once, while `bytesSync()` loads all of it on every slice. A `FileHandle`
+ * seeks and reads exactly one chunk, which is the discipline §5.3.3 asks for.
  */
 export async function sealMediaInParts(
   sourceUri: string,
@@ -122,9 +128,17 @@ export async function sealMediaInParts(
   let ivLength: number | null = null;
   let tagLength: number | null = null;
 
+  const handle = source.open(FileMode.ReadOnly);
+  try {
   for (const part of parts) {
-    const slice = await source.slice(part.offset, part.offset + part.length).arrayBuffer();
-    const sealed = await aesEncryptAsync(new Uint8Array(slice), key, {
+    handle.offset = part.offset;
+    const chunk = await handle.readBytes(part.length);
+    if (chunk.length !== part.length) {
+      throw new Error(
+        'part ' + part.index + ' read ' + chunk.length + ' bytes, not the planned ' + part.length,
+      );
+    }
+    const sealed = await aesEncryptAsync(chunk, key, {
       // Binds the part to this media item and this index: a substituted part
       // fails authentication rather than decrypting into the wrong place.
       additionalData: aadFor(mediaId, part.index),
@@ -147,6 +161,10 @@ export async function sealMediaInParts(
     if (out.exists) out.delete();
     out.create();
     await out.write(await sealed.combined('bytes'));
+  }
+  } finally {
+    // An open handle can stop the file being deleted (the library's own note).
+    handle.close();
   }
 
   /**
