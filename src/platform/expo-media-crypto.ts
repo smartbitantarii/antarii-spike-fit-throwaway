@@ -39,7 +39,7 @@ import type { Crypto, Fs, PartRef, StagingFile } from '../media/media.ts';
 import {
   planChunks,
   planFromDescriptor,
-  aadFor,
+  aadBytesFor,
   sealedPartName,
   stagingPartName,
   DEFAULT_CHUNK_BYTES,
@@ -141,7 +141,7 @@ export async function sealMediaInParts(
     const sealed = await aesEncryptAsync(chunk, key, {
       // Binds the part to this media item and this index: a substituted part
       // fails authentication rather than decrypting into the wrong place.
-      additionalData: aadFor(mediaId, part.index),
+      additionalData: aadBytesFor(mediaId, part.index),
     });
 
     // ⚠ READ, not assumed. `fromCombined` needs both lengths to split the blob
@@ -221,7 +221,7 @@ export class ExpoMediaCrypto implements Crypto {
     const plain = await aesDecryptAsync(sealed, await mediaKey(), {
       output: 'bytes',
       // The same binding used when sealing; a mismatch fails authentication.
-      additionalData: aadFor(mediaId, part.index),
+      additionalData: aadBytesFor(mediaId, part.index),
     });
 
     if (plain.length !== part.length) {

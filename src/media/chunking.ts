@@ -158,6 +158,31 @@ export function aadFor(mediaId: string, partIndex: number): string {
   return 'antarii/media/' + mediaId + '/part/' + partIndex;
 }
 
+/**
+ * 🔴 THE AAD AS BYTES — what `expo-crypto` must be given (2026-11-02).
+ *
+ * Its typings say of `additionalData`: *"When provided as a string, it must be
+ * base64-encoded."* `aadFor`'s text was passed as a string, so it was read as
+ * base64. **iOS decodes strictly and threw** *"Invalid base64 string"* on the
+ * first phone run; **Android decodes leniently and silently bound the parts
+ * to whatever bytes that produced** — the same bytes both ways, so it
+ * decrypted, which is why it looked fine. Bytes are passed through as they
+ * are, so both platforms now bind the text this function names.
+ *
+ * ⚠ ASCII only, checked: the media id is ours, and a character outside ASCII
+ * would need an encoding decision this spike has no reason to make.
+ */
+export function aadBytesFor(mediaId: string, partIndex: number): Uint8Array {
+  const text = aadFor(mediaId, partIndex);
+  const bytes = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c > 0x7f) throw new Error('the media id must be ASCII: ' + mediaId);
+    bytes[i] = c;
+  }
+  return bytes;
+}
+
 /** The on-disk name of one sealed part. */
 export function sealedPartName(mediaId: string, partIndex: number): string {
   return mediaId + '.part' + partIndex + '.sealed';

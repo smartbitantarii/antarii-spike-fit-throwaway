@@ -11,12 +11,20 @@ import {
   planChunks,
   planFromDescriptor,
   aadFor,
+  aadBytesFor,
   sealedPartName,
   stagingPartName,
   type EncryptedMediaDescriptor,
 } from './chunking.ts';
 
 const MiB = 1024 * 1024;
+
+test('🔴 the AAD reaches expo-crypto as bytes of its text, never as a string it would read as base64', () => {
+  const b = aadBytesFor('m1', 2);
+  assert.ok(b instanceof Uint8Array);
+  assert.equal(Buffer.from(b).toString('ascii'), aadFor('m1', 2));
+  assert.throws(() => aadBytesFor('mé', 0), /ASCII/);
+});
 
 test("S3's minimum is the figure the bench measured, not a remembered one", () => {
   assert.equal(S3_MIN_PART_BYTES, 5 * MiB);
