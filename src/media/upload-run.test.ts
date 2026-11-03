@@ -17,7 +17,7 @@ import {
 } from './upload-run.ts';
 import { mintOurSessionId } from './transfer-session.ts';
 import type { EncryptedMediaDescriptor } from './chunking.ts';
-import type { PartRef, StagingFile } from './media.ts';
+import { headerValue, type PartRef, type StagingFile } from './media.ts';
 import type { MediaSession } from './session.ts';
 
 const MIB = 1024 * 1024;
@@ -121,6 +121,13 @@ function rig(overrides: {
 
   return { deps, sent, staged, sessions, descriptors, discarded, completed };
 }
+
+test('🔴 an ETag is found whatever case the platform gave its header name', () => {
+  assert.equal(headerValue({ etag: '"a"' }, 'etag'), '"a"');
+  assert.equal(headerValue({ Etag: '"b"' }, 'etag'), '"b"');
+  assert.equal(headerValue({ ETAG: '"c"' }, 'ETag'), '"c"');
+  assert.equal(headerValue({ 'content-length': '1' }, 'etag'), undefined);
+});
 
 test('leg (ii): a clean run is a route, and it cleans up after itself', async () => {
   const r = rig();

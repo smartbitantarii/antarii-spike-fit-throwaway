@@ -67,6 +67,21 @@ export interface Grants {
   mint(mediaId: string, part: number): Promise<string>;
 }
 
+/**
+ * A response header by name, ignoring case — HTTP header names are
+ * case-insensitive, and each platform spells them its own way.
+ */
+export function headerValue(
+  headers: Readonly<Record<string, string>>,
+  name: string,
+): string | undefined {
+  const wanted = name.toLowerCase();
+  for (const [k, v] of Object.entries(headers)) {
+    if (k.toLowerCase() === wanted) return v;
+  }
+  return undefined;
+}
+
 export interface UploadOutcome {
   mediaId: string;
   partsSent: number;

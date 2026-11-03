@@ -30,7 +30,7 @@ import {
   type LocationFix,
 } from '../media/prepare.ts';
 import { mintOurSessionId, type TransferSessionInfo } from '../media/transfer-session.ts';
-import type { PartReceipt, PlatformUpload, StagingFile } from '../media/media.ts';
+import { headerValue, type PartReceipt, type PlatformUpload, type StagingFile } from '../media/media.ts';
 
 /**
  * 🔴 LEG (iii)'s FIRST SUBJECT, ANSWERED BY READING THE LIBRARY.
@@ -423,9 +423,12 @@ export class ExpoPartUpload implements PlatformUpload {
     if (result.status !== 200) {
       throw new Error('part ' + (idx + 1) + ' was refused with ' + result.status);
     }
-    // HTTP header names are case-insensitive and this is a plain record, so
-    // both spellings are tried rather than assuming the platform lower-cases.
-    const etag = result.headers.etag ?? result.headers.ETag;
+    // 🔴 Looked up case-insensitively (2026-11-03). Two spellings were tried
+    // here, `etag` and `ETag`; Android lower-cases, but iOS hands back
+    // `HTTPURLResponse.allHeaderFields` (read in `FileSystemUploadTask.swift`),
+    // whose key was neither, and the iPhone reported "no ETag" for a part S3
+    // had accepted.
+    const etag = headerValue(result.headers, 'etag');
     if (!etag) throw new Error('no ETag returned for part ' + (idx + 1));
     return { etag };
   }
