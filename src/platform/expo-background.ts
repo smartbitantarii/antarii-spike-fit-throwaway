@@ -18,7 +18,10 @@
  * why it is measured there first.
  */
 /**
- * 🔴 `expo-background-task` AND `expo-task-manager` ARE REMOVED, 2026-10-28,
+ * ✅ **RESTORED 2026-11-03 for leg (i)** — see `defineQueueDrainTask` below.
+ * What follows is the record of the removal, kept because it is `F-12`.
+ *
+ * 🔴 `expo-background-task` AND `expo-task-manager` WERE REMOVED, 2026-10-28,
  * AND THIS IS A RECORDED FINDING RATHER THAN A WORKAROUND.
  *
  * ✕ **What happened.** Registering the queue-drain task through
@@ -57,6 +60,8 @@
  * ⓘ Restoring these is a one-line revert of this comment block plus
  * `package.json` — kept narrow for exactly that reason.
  */
+import * as BackgroundTask from 'expo-background-task';
+import * as TaskManager from 'expo-task-manager';
 import { File, Paths } from 'expo-file-system';
 
 import type { EncryptedStore } from '../store/store.ts';
@@ -227,34 +232,46 @@ export async function probe(
  * nothing rather than as an error.
  */
 /**
- * ⚠ A NO-OP SINCE 2026-10-28, and the signature is kept deliberately.
- *
- * `App.tsx` calls this at module scope, and the comment there explains why
- * that matters. Keeping the shape means **nothing else had to change to make
- * the application startable**, so the diff that bought a launch figure is this
- * file and `package.json` and nothing more. *A smaller blast radius is worth
- * more here than a tidier API.*
+ * ✅ RESTORED 2026-11-03 for leg (i), run last (owner, Decision 3), exactly as
+ * removed in `b0a58bb` — same body, same registration — so that if `F-12`
+ * recurs it recurs under the conditions it was first seen in. The packages are
+ * pinned to the versions Expo SDK 58.0.11 lists (`expo-background-task`
+ * 58.0.11, `expo-task-manager` 58.0.12); they were `^` ranges before.
  */
-export function defineQueueDrainTask(_makeStore: () => EncryptedStore): void {
-  // Nothing to define: there is no task runner in this build.
+export function defineQueueDrainTask(makeStore: () => EncryptedStore): void {
+  if (TaskManager.isTaskDefined(TASK_NAME)) return;
+  TaskManager.defineTask(TASK_NAME, async () => {
+    try {
+      await probe('background-task', 'background', makeStore());
+    } catch (err) {
+      await appendMark({
+        at: new Date().toISOString(),
+        trigger: 'background-task',
+        appState: 'background',
+        storeOpened: false,
+        storeError: null,
+        queueRead: false,
+        queueDepth: null,
+        queueWritten: false,
+        error: 'task body threw: ' + (err instanceof Error ? err.message : String(err)),
+      });
+    }
+    return BackgroundTask.BackgroundTaskResult.Success;
+  });
 }
 
-/**
- * ⚠ Reports unavailability rather than pretending to register.
- *
- * ✕ **It does NOT return one of leg (i)'s verdicts**, and that is the point.
- * The run plan's table offers *pass*, *framework/prototype failure* and
- * *platform limit* — **all three assume the application runs**, so none of
- * them describes a mechanism that stopped the app from starting. *Returning
- * "restricted" or "platform limit" here would file this result under a cell it
- * does not belong in, which is the class of defect `C1`, `C2` and `M5` were
- * all caught being.*
- */
 export async function registerQueueDrain(): Promise<string> {
-  return (
-    'UNAVAILABLE — expo-background-task removed 2026-10-28 after it left the ' +
-    'application unable to start (see this file\'s header). Task "' +
-    TASK_NAME +
-    '" is not registered, and this is NOT a leg (i) verdict.'
-  );
+  try {
+    const status = await BackgroundTask.getStatusAsync();
+    if (status === BackgroundTask.BackgroundTaskStatus.Restricted) {
+      return 'restricted — background execution is disabled for this app or device';
+    }
+    const already = await TaskManager.isTaskRegisteredAsync(TASK_NAME);
+    if (!already) {
+      await BackgroundTask.registerTaskAsync(TASK_NAME, { minimumInterval: 15 });
+    }
+    return 'registered (minimum interval 15 min — the scheduler decides)';
+  } catch (err) {
+    return 'registration failed: ' + (err instanceof Error ? err.message : String(err));
+  }
 }

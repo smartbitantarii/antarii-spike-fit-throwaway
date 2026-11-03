@@ -24,11 +24,12 @@
           "processing"
         ],
         "BGTaskSchedulerPermittedIdentifiers": [
-          "antarii-spike-queue-drain"
+          "com.expo.modules.backgroundtask.processing"
         ]
       }
     },
     "plugins": [
+      "expo-background-task",
       [
         "expo-sqlite",
         {
