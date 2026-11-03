@@ -48,7 +48,7 @@
         {
           "android": {
             "usesCleartextTraffic": true,
-            "extraProguardRules": "-keep class * implements com.google.firebase.components.ComponentRegistrar { void <init>(); }\n-keep class * extends androidx.room.RoomDatabase { <init>(); }"
+            "extraProguardRules": "-keep class * implements com.google.firebase.components.ComponentRegistrar { void <init>(); }\n-keep class * extends androidx.room.RoomDatabase { <init>(); }\n-keep class * extends androidx.work.InputMerger { <init>(); }\n-keep class * extends androidx.work.ListenableWorker { <init>(android.content.Context, androidx.work.WorkerParameters); }"
           }
         }
       ]

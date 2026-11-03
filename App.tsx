@@ -35,6 +35,8 @@ import {
   probe as probeBackground,
   type BackgroundMark,
 } from './src/platform/expo-background.ts';
+import { pendingTaskRequests } from './modules/antarii-bg-probe/index.ts';
+import { judgePending } from './src/harness/background-pending.ts';
 import { buildFill, clearFill, measureFill } from './src/platform/expo-fill.ts';
 // ---- condition 4's probes (SC-03, SC-04, SC-10) ----
 /**
@@ -1022,6 +1024,34 @@ export default function App(): React.JSX.Element {
   }, []);
 
   /**
+   * 🔴 LEG (i) ON iOS: IS THE REQUEST ACTUALLY HELD? `expo-background-task`
+   * throws away `BGTaskScheduler.submit`'s error, so *"registered"* above does
+   * not prove iOS accepted anything — see `src/harness/background-pending.ts`.
+   * Every check goes into `probes`, so it travels in the record with a time.
+   */
+  const [bgPending, setBgPending] = React.useState('iOS holds our request: not checked yet');
+  const onCheckPending = React.useCallback(async () => {
+    const at = new Date().toISOString();
+    let r;
+    try {
+      r = judgePending(await pendingTaskRequests(), at);
+    } catch (e) {
+      r = judgePending(null, at, e instanceof Error ? e.message : String(e));
+    }
+    addProbe(r);
+    setBgPending('iOS holds our request: ' + r.verdict + ' — ' + r.detail);
+  }, [addProbe]);
+
+  React.useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    // ⚠ Delayed: the package submits from a detached task after its
+    // registration gate opens, so asking at once could race the submit and
+    // report "not-held" for a request that was merely late.
+    const t = setTimeout(() => { void onCheckPending(); }, 5000);
+    return () => clearTimeout(t);
+  }, [onCheckPending]);
+
+  /**
    * ➕ THE FOREGROUND CONTROL, AND IT IS NOT A FORMALITY. If the store cannot be
    * opened from a background task, that result means nothing unless the same
    * code opens it fine in the foreground — otherwise the finding is "our probe
@@ -1615,6 +1645,19 @@ export default function App(): React.JSX.Element {
         >
           <Text>{'Probe the queue now (foreground control)'}</Text>
         </Pressable>
+        {Platform.OS === 'ios' ? (
+          <>
+            <Text style={styles.note}>{bgPending}</Text>
+            <Pressable
+              onPress={() => { void onCheckPending(); }}
+              disabled={fillBusy || busy}
+              style={styles.capture}
+              accessibilityRole="button"
+            >
+              <Text>{'Ask iOS what it holds'}</Text>
+            </Pressable>
+          </>
+        ) : null}
         <Pressable
           onPress={() => { void onClearMarks(); }}
           disabled={fillBusy || busy}

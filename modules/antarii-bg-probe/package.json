@@ -1,0 +1,10 @@
+{
+  "name": "antarii-bg-probe",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Leg (i): which background task requests iOS is holding for this app. Read-only. Disposable.",
+  "license": "UNLICENSED",
+  "author": "Antarii Limited",
+  "homepage": "https://antarii.com",
+  "main": "index.ts"
+}
