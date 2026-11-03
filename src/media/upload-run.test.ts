@@ -10,7 +10,9 @@ import assert from 'node:assert/strict';
 import {
   LEG_III_MEDIA_ID,
   LEG_III_STOP_AFTER_PARTS,
+  checkLegIV,
   probeLegII,
+  sealForLegIV,
   resumeLegIII,
   startLegIII,
   type UploadRunDeps,
@@ -210,6 +212,47 @@ test('🔴 leg (iii): a short object keeps the evidence and does not pass', asyn
   const [p] = await resumeLegIII(after.deps);
   assert.equal(p!.verdict, 'no-route');
   assert.equal(after.sessions.size, 1);
+});
+
+test('leg (iv): setup seals once, and a second tap does not re-seal', async () => {
+  const r = rig();
+  assert.equal((await sealForLegIV(r.deps)).verdict, 'not-established');
+  assert.equal(r.descriptors.size, 1);
+  assert.match((await sealForLegIV(r.deps)).detail, /already sealed/);
+});
+
+test('leg (iv): every part opening after the change is a route, and the file is kept', async () => {
+  const r = rig();
+  await sealForLegIV(r.deps);
+  const p = await checkLegIV(r.deps, 'a new biometric', async () => 200);
+  assert.equal(p.verdict, 'route-exists', p.detail);
+  assert.equal(r.staged.size, 0, 'plaintext left behind by the check');
+  assert.equal(r.descriptors.size, 1, 'the sealed file must stay for the next change');
+  // and the same file can be checked again after the second event
+  assert.equal((await checkLegIV(r.deps, 'a passcode change', async () => 200)).verdict, 'route-exists');
+});
+
+test('🔴 leg (iv): a part that will not open is a failure, naming the part', async () => {
+  const r = rig();
+  await sealForLegIV(r.deps);
+  r.deps.cryptoFor = () => ({
+    async decryptPart() { throw new Error('authentication failed'); },
+  });
+  const p = await checkLegIV(r.deps, 'a passcode change', async () => 200);
+  assert.equal(p.verdict, 'no-route');
+  assert.match(p.detail, /part 0 would not open: Error: authentication failed/);
+});
+
+test('🔴 leg (iv): an empty store is not a pass, however well the media opened', async () => {
+  const r = rig();
+  await sealForLegIV(r.deps);
+  assert.equal((await checkLegIV(r.deps, 'a new biometric', async () => 0)).verdict, 'no-route');
+});
+
+test('leg (iv): checking before setting up is reported as that', async () => {
+  const p = await checkLegIV(rig().deps, 'a new biometric', async () => 200);
+  assert.equal(p.verdict, 'not-established');
+  assert.match(p.detail, /run the setup first/);
 });
 
 test('leg (iii): nothing to resume is reported as that, not as a failure', async () => {

@@ -33,6 +33,9 @@ import {
 } from './transfer-session.ts';
 import type { SqliteLike } from '../store/store.ts';
 
+/** Leg (iv)'s sealed file: left in place across the lock changes, and checked after each. */
+export const LEG_IV_MEDIA_ID = 'spike-leg-iv';
+
 /** Fixed, so the build after the update can find what the build before it left. */
 export const LEG_III_MEDIA_ID = 'spike-leg-iii';
 /** Stops part-way, so there is something in flight when the update lands. */
@@ -371,5 +374,112 @@ export async function resumeLegIII(deps: UploadRunDeps): Promise<UploadProbe[]> 
     ];
   } catch (err) {
     return [failed(LEG_III, LEG_III_NOT_PROVEN, err)];
+  }
+}
+
+// ------------------------------------------------------------------ leg (iv)
+
+/**
+ * Leg (iv): do the keys survive a new biometric and a passcode change?
+ *
+ * ⚠ TWO KEYS, AND THE STORE'S IS TESTED BY THE APP OPENING AT ALL. The
+ * database key opens the encrypted store at launch, so if it is lost the app
+ * stops at "the encrypted store did not open" and no button below is reached.
+ * The **media** key is only used when media is read, so it needs a file sealed
+ * BEFORE the change and opened AFTER it. GCM authenticates every part, so a
+ * part that decrypts is a part read with the same key.
+ *
+ * ✕ NOT HERE: removing the lock entirely. Run plan §5 makes that a separate
+ * check of a REQUIRED refusal (ADR-003 §5.3.4), never leg (iv), and the spike
+ * app does not implement the refusal.
+ */
+export type LegIvEvent = 'a new biometric' | 'a passcode change';
+
+const LEG_IV = 'axis 5 leg (iv): the keys survive ';
+const LEG_IV_NOT_PROVEN =
+  'removing the lock entirely, which must be refused (ADR-003 §5.3.4) and is not leg (iv); a key ' +
+  'bound to user authentication, which ours is not (WHEN_UNLOCKED_THIS_DEVICE_ONLY)';
+
+/** Before the change: seals a file and leaves it, so the next check has something to open. */
+export async function sealForLegIV(deps: UploadRunDeps): Promise<UploadProbe> {
+  const capability = LEG_IV + 'a lock change (setup)';
+  try {
+    const existing = await deps.descriptors.load(LEG_IV_MEDIA_ID);
+    if (existing) {
+      return {
+        capability,
+        verdict: 'not-established',
+        detail: `already sealed: ${existing.partCount} parts are waiting. Make the change, then check`,
+        notProven: LEG_IV_NOT_PROVEN,
+      };
+    }
+    const descriptor = await deps.seal(LEG_IV_MEDIA_ID);
+    await deps.descriptors.save(descriptor);
+    return {
+      capability,
+      verdict: 'not-established',
+      detail:
+        `sealed ${descriptor.partCount} parts under build ${deps.buildId}. Make the change, ` +
+        'restart the app, then check',
+      notProven: LEG_IV_NOT_PROVEN,
+    };
+  } catch (err) {
+    return failed(capability, LEG_IV_NOT_PROVEN, err);
+  }
+}
+
+/**
+ * After the change. The sealed file is kept, so the same file is checked after
+ * each event; `storeJobs` is a read from the encrypted store, so the record
+ * shows the database answered as well as opened.
+ */
+export async function checkLegIV(
+  deps: UploadRunDeps,
+  after: LegIvEvent,
+  storeJobs: () => Promise<number>,
+): Promise<UploadProbe> {
+  const capability = LEG_IV + after;
+  try {
+    const descriptor = await deps.descriptors.load(LEG_IV_MEDIA_ID);
+    if (!descriptor) {
+      return {
+        capability,
+        verdict: 'not-established',
+        detail: 'nothing sealed to check: run the setup first, before the change',
+        notProven: LEG_IV_NOT_PROVEN,
+      };
+    }
+    const jobs = await storeJobs();
+    const crypto = deps.cryptoFor(descriptor);
+    let opened = 0;
+    for (const part of planFromDescriptor(descriptor)) {
+      let file: StagingFile | null = null;
+      try {
+        file = await crypto.decryptPart(LEG_IV_MEDIA_ID, part);
+      } catch (err) {
+        return {
+          capability,
+          verdict: 'no-route',
+          detail:
+            `the store answered (${jobs} jobs) but media part ${part.index} would not open: ` +
+            String(err),
+          notProven: LEG_IV_NOT_PROVEN,
+        };
+      } finally {
+        if (file) await deps.fs.delete(file.path);
+      }
+      opened++;
+    }
+    const pass = jobs > 0 && opened === descriptor.partCount;
+    return {
+      capability,
+      verdict: pass ? 'route-exists' : 'no-route',
+      detail:
+        `after ${after}: the store opened and answered (${jobs} jobs), and ${opened} of ` +
+        `${descriptor.partCount} media parts sealed before it decrypted`,
+      notProven: LEG_IV_NOT_PROVEN,
+    };
+  } catch (err) {
+    return failed(capability, LEG_IV_NOT_PROVEN, err);
   }
 }

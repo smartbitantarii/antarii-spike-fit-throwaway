@@ -67,6 +67,8 @@ import {
   probeLegII,
   resumeLegIII,
   startLegIII,
+  sealForLegIV,
+  checkLegIV,
   type UploadRunDeps,
 } from './src/media/upload-run.ts';
 import { probeVideo } from './src/platform/expo-capability.ts';
@@ -1836,6 +1838,45 @@ export default function App(): React.JSX.Element {
           accessibilityRole="button"
         >
           <Text>{busy ? 'running…' : 'Leg (iii) step 2: resume after the update'}</Text>
+        </Pressable>
+        {/*
+          Round 4 — leg (iv). Seal BEFORE the lock change; restart the app
+          after it, then check. Restarting matters: it is the reopen that reads
+          the store's key back out of the keystore.
+        */}
+        <Pressable
+          onPress={() => {
+            void runUploadProbe(async (deps) => [await sealForLegIV(deps)]);
+          }}
+          disabled={busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>{busy ? 'running…' : 'Leg (iv) setup: seal a file before the change'}</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => {
+            void runUploadProbe(async (deps) => [
+              await checkLegIV(deps, 'a new biometric', async () => (await store.counts()).jobs),
+            ]);
+          }}
+          disabled={busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>{busy ? 'running…' : 'Leg (iv) check: after a new fingerprint / Face ID'}</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => {
+            void runUploadProbe(async (deps) => [
+              await checkLegIV(deps, 'a passcode change', async () => (await store.counts()).jobs),
+            ]);
+          }}
+          disabled={busy}
+          style={styles.capture}
+          accessibilityRole="button"
+        >
+          <Text>{busy ? 'running…' : 'Leg (iv) check: after a passcode change'}</Text>
         </Pressable>
         <Pressable
           onPress={() => {
