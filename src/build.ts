@@ -20,10 +20,10 @@
  */
 
 /** Must equal `expo.version` in `app.json`. Enforced by `build.test.ts`. */
-export const APP_VERSION = '1.0.0';
+export const APP_VERSION = '1.0.1';
 
 /** Must equal `expo.runtimeVersion` in `app.json`. Enforced by `build.test.ts`. */
-export const RUNTIME_VERSION = '1';
+export const RUNTIME_VERSION = '2';
 
 /**
  * What goes in the harness record and in every persisted session row.
@@ -31,7 +31,7 @@ export const RUNTIME_VERSION = '1';
  * used rather than a semantic version so the record reads the way the brief
  * and the verdict table read.
  */
-export const BUILD_ID = 'N';
+export const BUILD_ID = 'N+1';
 
 /**
  * 🔴 THE COMMIT THAT PRODUCED THIS BUILD — adversarial review finding `M4`.
